@@ -1,0 +1,102 @@
+
+# Ambientes virtuais
+
+venv/
+.env/
+.venv/
+env/
+ENV/
+
+
+# Cache e bytecode Python
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+
+# Dados e resultados gerados 
+
+# Dados brutos e processados podem ser grandes e serem re-obtidos/re-gerados
+data/raw/*.csv
+data/processed/*.csv
+
+# Resultados numéricos gerados pelo pipeline
+results/metrics/*.csv
+results/weights/*.csv
+
+# Relatórios gerados automaticamente
+reports/figures/*.png
+reports/figures/*.jpg
+reports/figures/*.pdf
+reports/tables/*.csv
+reports/tables/*.md
+reports/tables/*.tex
+
+# Notebooks convertidos ou checkpoints
+*.nbconvert.ipynb
+
+
+# Configurações de IDEs e editores
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+
+# Git
+
+.git/
+
+
+# Jupyter Notebook checkpoints
+
+.ipynb_checkpoints/
+
+
+# Logs e arquivos temporários
+
+*.log
+*.tmp
+*.bak
+*.orig
+
+
+# Sistema operacional
+
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db

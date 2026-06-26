@@ -1,0 +1,16 @@
+services:
+  optimization:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tcc-optimization
+    volumes:
+      # Persiste dados brutos e resultados fora do container
+      - ./data:/app/data
+      - ./results:/app/results
+      - ./reports:/app/reports
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Comando padrão executa o pipeline; pode ser sobrescrito:
+    # docker compose run --rm optimization python main.py --force-download
+    command: ["python", "main.py"]

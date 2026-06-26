@@ -1,0 +1,53 @@
+# Configuração do projeto de otimização de portfólios de criptoativos
+
+# Período de análise (formato YYYY-MM-DD)
+start_date: "2022-01-01"
+end_date: "2025-12-31"
+
+# Janela de estimação em meses (rolling window)
+estimation_window_months: 12
+rebalance_frequency: "MS"  # Month Start
+
+# Ativos: componentes do Nasdaq Crypto Index (NCI) disponíveis na Coinbase
+assets:
+  - BTC
+  - ETH
+  - SOL
+  - XRP
+  - ADA
+  - AVAX
+  - MATIC
+  - LINK
+  - UNI
+  - LTC
+
+# Perfis de risco: limite de correlação média máxima
+profiles:
+  conservador:
+    max_avg_correlation: 0.50
+    name: "Conservador"
+  moderado:
+    max_avg_correlation: 0.70
+    name: "Moderado"
+  agressivo:
+    max_avg_correlation: 0.85
+    name: "Agressivo"
+
+# Parâmetros de otimização
+optimization:
+  risk_free_rate_annual: 0.045  # Taxa livre de risco anualizada (~T-Bill 2022-2024)
+  min_weight: 0.0
+  max_weight: 0.40  # Limite de concentração máxima por ativo (40%)
+  objective: "max_sharpe"  # Alternativas: "min_volatility", "max_quadratic_utility"
+
+# Parâmetros de backtesting
+backtest:
+  initial_capital: 10000.0
+  transaction_cost: 0.001  # 0.1% por rebalanceamento
+
+# Caminhos
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  results: "results"
+  reports: "reports"
