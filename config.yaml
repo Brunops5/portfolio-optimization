@@ -6,48 +6,75 @@ end_date: "2025-12-31"
 
 # Janela de estimação em meses (rolling window)
 estimation_window_months: 12
-rebalance_frequency: "MS"  # Month Start
+rebalance_frequency: "W-MON"  # Semanas de segunda a domingo
 
-# Ativos: componentes do Nasdaq Crypto Index (NCI) disponíveis na Coinbase
+# União dos constituintes históricos do NCI entre 2022 e 2025. A composição
+# vigente em cada data vem de paths.constituent_history; esta lista define apenas
+# quais séries de preços precisam ser coletadas.
 assets:
   - BTC
   - ETH
+  - LTC
+  - LINK
+  - DOT
+  - UNI
+  - XLM
+  - BCH
+  - ETC
+  - FIL
+  - AXS
+  - SAND
+  - ARB
   - SOL
   - XRP
   - ADA
   - AVAX
   - MATIC
-  - LINK
-  - UNI
-  - LTC
 
-# Perfis de risco: limite de correlação média máxima
+# Cenários experimentais: volatilidade anual máxima estimada.
+# Três pontos ao longo da região factível das janelas rolling: o menor alvo
+# factível em todas as janelas (65%), um ponto intermediário (85%) e o extremo
+# superior do desenho (105%). As chaves são neutras para não associar os cortes
+# a perfis de investidor sem uma escala externa de suitability.
 profiles:
-  conservador:
-    max_avg_correlation: 0.50
-    name: "Conservador"
-  moderado:
-    max_avg_correlation: 0.70
-    name: "Moderado"
-  agressivo:
-    max_avg_correlation: 0.85
-    name: "Agressivo"
+  risco_065:
+    target_volatility: 0.65
+    name: "Risco 65%"
+  risco_085:
+    target_volatility: 0.85
+    name: "Risco 85%"
+  risco_105:
+    target_volatility: 1.05
+    name: "Risco 105%"
 
 # Parâmetros de otimização
 optimization:
-  risk_free_rate_annual: 0.045  # Taxa livre de risco anualizada (~T-Bill 2022-2024)
-  min_weight: 0.0
-  max_weight: 0.40  # Limite de concentração máxima por ativo (40%)
-  objective: "max_sharpe"  # Alternativas: "min_volatility", "max_quadratic_utility"
+  min_weight: 0.0               # Long-only (sem short selling)
+  max_weight: 1.0               # Sem teto adicional de concentração
+  min_observations: 300         # Mínimo absoluto na janela de estimação
+  max_data_gap_days: 7          # Cotação mais recente permitida
+  max_internal_gap_days: 7      # Limite para forward fill de lacunas internas
 
 # Parâmetros de backtesting
 backtest:
   initial_capital: 10000.0
   transaction_cost: 0.001  # 0.1% por rebalanceamento
+  # Posições sem cotação tornam a validação final reprovada. A série deve
+  # ser corrigida (por exemplo, conversão de token ou liquidação documentada).
+  stale_positions_are_errors: true
+
+# Comparações pareadas em semanas não sobrepostas. A agregação mensal é mantida
+# como análise de robustez, pois retornos semanais podem apresentar dependência
+# temporal mesmo quando não há sobreposição.
+statistics:
+  primary_return_frequency: "W-SUN"
+  robustness_return_frequency: "ME"
 
 # Caminhos
 paths:
-  raw_data: "data/raw"
+  # PORTFOLIO_CACHE_DIR pode sobrescrever o cache padrão na home.
+  cache_dir: "~/.cache/portfolio-optimization"
   processed_data: "data/processed"
+  constituent_history: "nci_constituents.yaml"
   results: "results"
   reports: "reports"

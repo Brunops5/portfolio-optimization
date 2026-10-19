@@ -17,6 +17,7 @@ from backtester import (
     compute_drawdown_series,
     maximum_drawdown,
     calculate_metrics,
+    run_full_backtest,
 )
 
 
@@ -59,17 +60,79 @@ class TestBacktestStrategy:
             index=[dates[0], dates[3]],
         )
         bt_no_cost = backtest_strategy(rets, weights, transaction_cost=0.0, initial_capital=1000.0)
-        bt_with_cost = backtest_strategy(rets, weights, transaction_cost=0.01, initial_capital=1000.0)
+        bt_with_cost = backtest_strategy(
+            rets, weights, transaction_cost=0.01, initial_capital=1000.0
+        )
         assert bt_with_cost["portfolio_value"].iloc[-1] < bt_no_cost["portfolio_value"].iloc[-1]
 
-    def test_weights_sum_one_handled(self):
-        """Pesos que não somam exatamente 1 devem ser normalizados."""
+    def test_transaction_cost_is_charged_once(self):
+        dates = pd.date_range("2023-01-01", periods=3, freq="D")
+        rets = pd.DataFrame(0.0, index=dates, columns=["A", "B"])
+        weights = pd.DataFrame(
+            {"A": [1.0, 0.0], "B": [0.0, 1.0]}, index=[dates[0], dates[1]]
+        )
+        result = backtest_strategy(rets, weights, transaction_cost=0.01, initial_capital=1000)
+        assert result.loc[dates[1], "portfolio_value"] == pytest.approx(980.0)
+        assert result.loc[dates[1], "transaction_cost"] == pytest.approx(20.0)
+
+    def test_weights_drift_between_rebalances(self):
+        dates = pd.date_range("2023-01-01", periods=2, freq="D")
+        rets = pd.DataFrame({"A": [1.0, 0.0], "B": [0.0, 0.0]}, index=dates)
+        weights = pd.DataFrame({"A": [0.5], "B": [0.5]}, index=[dates[0]])
+        result = backtest_strategy(rets, weights, transaction_cost=0, initial_capital=100)
+        assert result.iloc[0]["portfolio_value"] == pytest.approx(150.0)
+        assert result.iloc[1]["portfolio_value"] == pytest.approx(150.0)
+
+    def test_missing_held_return_preserves_last_value_and_is_reported(self):
+        dates = pd.date_range("2023-01-01", periods=2, freq="D")
+        rets = pd.DataFrame({"A": [0.1, np.nan], "B": [0.0, 0.0]}, index=dates)
+        weights = pd.DataFrame({"A": [1.0], "B": [0.0]}, index=[dates[0]])
+        result = backtest_strategy(rets, weights, transaction_cost=0, initial_capital=100)
+        assert result.iloc[-1]["portfolio_value"] == pytest.approx(110.0)
+        assert result.iloc[-1]["stale_positions"] == 1
+
+    def test_missing_position_on_rebalance_is_reported_before_liquidation(self):
+        dates = pd.date_range("2023-01-01", periods=2, freq="D")
+        rets = pd.DataFrame(
+            {"A": [0.0, np.nan], "B": [0.0, 0.0]}, index=dates
+        )
+        weights = pd.DataFrame(
+            {"A": [1.0, 0.0], "B": [0.0, 1.0]}, index=dates
+        )
+
+        result = backtest_strategy(
+            rets, weights, transaction_cost=0, initial_capital=100
+        )
+
+        assert result.loc[dates[1], "stale_positions"] == 1
+
+    def test_invalid_weight_sum_is_rejected(self):
+        """O backtest não deve corrigir silenciosamente uma carteira inválida."""
         dates = pd.date_range("2023-01-01", "2023-01-05", freq="B")
         n = len(dates)
         rets = pd.DataFrame({"A": [0.0] * n, "B": [0.0] * n}, index=dates)
         weights = pd.DataFrame({"A": [0.6], "B": [0.6]}, index=[dates[0]])  # soma 1.2
-        bt = backtest_strategy(rets, weights, transaction_cost=0.0)
-        assert bt["portfolio_value"].iloc[-1] == pytest.approx(10000.0)
+        with pytest.raises(ValueError, match="somar 1"):
+            backtest_strategy(rets, weights, transaction_cost=0.0)
+
+    def test_full_backtest_collects_trading_metrics(self):
+        dates = pd.date_range("2023-01-02", periods=14, freq="D")
+        returns = pd.DataFrame(0.0, index=dates, columns=["A", "B"])
+        weights = pd.DataFrame(
+            {"A": [1.0, 0.0], "B": [0.0, 1.0]},
+            index=[dates[0], dates[7]],
+        )
+
+        _, metrics = run_full_backtest(
+            returns,
+            {"strategy": weights},
+            transaction_cost=0.01,
+            initial_capital=1000.0,
+        )
+
+        assert metrics.loc["strategy", "total_turnover"] == pytest.approx(2.0)
+        assert metrics.loc["strategy", "total_transaction_cost"] == pytest.approx(20.0)
+        assert metrics.loc["strategy", "rebalance_events"] == 1
 
 
 class TestDrawdown:
@@ -92,6 +155,10 @@ class TestDrawdown:
         pv = pd.Series([100, 120, 80, 100], index=pd.date_range("2023-01-01", periods=4))
         assert maximum_drawdown(pv) == pytest.approx(-1 / 3, abs=1e-6)
 
+    def test_drawdown_includes_initial_capital(self):
+        pv = pd.Series([90.0, 95.0], index=pd.date_range("2023-01-01", periods=2))
+        assert maximum_drawdown(pv, initial_capital=100.0) == pytest.approx(-0.1)
+
 
 class TestCalculateMetrics:
     """Testes para métricas de desempenho."""
@@ -109,19 +176,17 @@ class TestCalculateMetrics:
             "total_return",
             "annualized_return",
             "annualized_volatility",
-            "sharpe_ratio",
             "max_drawdown",
-            "calmar_ratio",
         }
-        assert expected_keys.issubset(metrics.keys())
+        assert expected_keys == set(metrics)
 
     def test_zero_volatility_handled(self):
-        """Carteira sem volatilidade deve ter Sharpe = 0."""
+        """Carteira constante deve registrar volatilidade igual a zero."""
         dates = pd.date_range("2023-01-01", "2023-12-31", freq="B")
         pv = pd.Series([10000.0] * len(dates), index=dates)
         daily_rets = pd.Series([0.0] * (len(dates) - 1), index=dates[1:])
         metrics = calculate_metrics(pv, daily_rets)
-        assert metrics["sharpe_ratio"] == pytest.approx(0.0)
+        assert metrics["annualized_volatility"] == pytest.approx(0.0)
 
     def test_positive_total_return(self):
         """Carteira que cresce deve ter retorno total positivo."""

@@ -1,120 +1,94 @@
-"""
-Módulo de validação e sanity checks do experimento.
-Garante coerência matemática, financeira e estatística dos resultados.
+"""Validações matemáticas e financeiras do experimento."""
 
-Separa:
-- ERROS: problemas que invalidam o experimento (soma dos pesos != 1,
-  patrimônio negativo, volatilidade zero, etc.)
-- AVISOS: situações esperadas do domínio (fallback por correlação
-  intrínseca do mercado maior que o limite do perfil).
-"""
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Dict, List, Tuple
+import yaml
+
+from optimizer import constituent_record_for_date, load_constituent_history
+
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
+with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+    CONFIG = yaml.safe_load(config_file)
 
 
-def validate_weights(weights_dict: Dict[str, pd.DataFrame]) -> Tuple[List[str], List[str]]:
-    """
-    Valida se os pesos otimizados respeitam as restrições matemáticas.
-    Retorna (erros, avisos).
-    """
+def validate_weights(
+    weights_dict: Dict[str, pd.DataFrame],
+) -> Tuple[List[str], List[str]]:
     errors = []
-
-    for name, wdf in weights_dict.items():
-        # 1. Soma dos pesos deve ser +-1
-        row_sums = wdf.sum(axis=1)
-        if not np.allclose(row_sums, 1.0, atol=1e-4):
-            bad = row_sums[~np.isclose(row_sums, 1.0, atol=1e-4)]
-            errors.append(
-                f"[{name}] Soma dos pesos != 1 em {len(bad)} datas: {bad.iloc[0]:.6f}"
-            )
-
-        # 2. Pesos devem ser não negativos
-        if (wdf < -1e-6).any().any():
-            errors.append(f"[{name}] Pesos negativos detectados.")
-
-        # 3. Pesos devem estar dentro do limite de concentração (40%)
-        max_w = wdf.max().max()
-        if max_w > 0.40 + 1e-6:
-            errors.append(f"[{name}] Peso máximo {max_w:.4f} excede 40%.")
-
-        # 4. Cada linha deve ter pelo menos 1 ativo selecionado
-        num_selected = (wdf > 1e-6).sum(axis=1)
-        if (num_selected == 0).any():
-            errors.append(f"[{name}] Carteira sem ativos em alguma data.")
-
+    min_allowed = CONFIG["optimization"]["min_weight"]
+    max_allowed = CONFIG["optimization"]["max_weight"]
+    for name, weights in weights_dict.items():
+        row_sums = weights.sum(axis=1)
+        if not np.allclose(row_sums, 1.0, atol=1e-6):
+            errors.append(f"[{name}] Soma dos pesos diferente de 1.")
+        if not np.isfinite(weights.to_numpy()).all():
+            errors.append(f"[{name}] Peso não finito detectado.")
+        if (weights < min_allowed - 1e-7).any().any():
+            errors.append(f"[{name}] Pesos negativos ou abaixo do limite detectados.")
+        if (weights > max_allowed + 1e-7).any().any():
+            errors.append(f"[{name}] Peso acima do limite {max_allowed:.0%} detectado.")
+        if ((weights > 1e-6).sum(axis=1) == 0).any():
+            errors.append(f"[{name}] Carteira vazia em alguma data.")
     return errors, []
 
 
-def validate_correlation_constraint(
+def validate_historical_constituents(
     weights_dict: Dict[str, pd.DataFrame],
-    daily_returns: pd.DataFrame,
-    profiles: Dict,
 ) -> Tuple[List[str], List[str]]:
-    """
-    Verifica se a correlação média ponderada respeita o limite do perfil.
+    """Garante peso zero fora da composição do NCI vigente em cada data."""
+    history = load_constituent_history()
+    errors = []
+    for strategy, weights in weights_dict.items():
+        for date, row in weights.iterrows():
+            active = set(
+                constituent_record_for_date(history, pd.Timestamp(date))["constituents"]
+            )
+            inactive = row.index.difference(list(active))
+            invalid = row.loc[inactive].abs() > 1e-7
+            if invalid.any():
+                assets = sorted(row.loc[inactive].index[invalid].tolist())
+                errors.append(
+                    f"[{strategy}] {pd.Timestamp(date).date()}: peso em ativo fora "
+                    f"da composição vigente do NCI: {assets}."
+                )
+    return errors, []
 
-    Quando a correlação intrínseca do mercado é maior que o limite do perfil,
-    o otimizador faz fallback (relaxa a restrição). Isso é comportamento
-    esperado e documentado no PLAN.md, então é reportado como AVISO.
-    """
+
+def validate_risk_targets(
+    diagnostics: Optional[pd.DataFrame],
+) -> Tuple[List[str], List[str]]:
+    """Valida PSD, o respeito aos alvos de risco e sinaliza janelas inviáveis."""
+    if diagnostics is None or diagnostics.empty:
+        return [], ["Diagnóstico de otimização não fornecido."]
     errors = []
     warnings = []
-    months = daily_returns.resample("ME").last().index
-
-    for name, wdf in weights_dict.items():
-        if name == "benchmark":
-            continue
-        if name not in profiles:
-            continue
-
-        max_corr = profiles[name]["max_avg_correlation"]
-
-        for rebalance_date in wdf.index:
-            idx = months.get_loc(rebalance_date)
-            if idx < 12:
-                continue
-            window_start = months[idx - 12]
-            window_end = months[idx - 1]
-            mask = (daily_returns.index >= window_start) & (daily_returns.index <= window_end)
-            window_rets = daily_returns.loc[mask]
-
-            w = wdf.loc[rebalance_date]
-            selected = w[w > 1e-6].index.tolist()
-            if len(selected) < 2:
-                continue
-
-            corr_matrix = window_rets[selected].corr().values
-            weights_sel = w[selected].values
-
-            n = len(weights_sel)
-            num = 0.0
-            den = 0.0
-            for i in range(n):
-                for j in range(i + 1, n):
-                    prod = weights_sel[i] * weights_sel[j]
-                    num += prod * corr_matrix[i, j]
-                    den += prod
-            avg_corr = num / den if den > 1e-12 else 0.0
-
-            # Correlação fora do intervalo [-1, 1] seria um erro
-            if avg_corr < -1.0 or avg_corr > 1.0:
-                errors.append(
-                    f"[{name}] {rebalance_date.date()}: "
-                    f"correlação={avg_corr:.3f} fora de [-1, 1]"
-                )
-                continue
-
-            # Excede o limite do perfil: provavelmente fallback esperado
-            if avg_corr > max_corr + 1e-6:
-                warnings.append(
-                    f"[{name}] {rebalance_date.date()}: "
-                    f"correlação={avg_corr:.3f} > limite={max_corr} "
-                    f"(fallback esperado)"
-                )
-
+    if not diagnostics["covariance_psd"].fillna(False).all():
+        errors.append("Covariância não PSD detectada após a correção.")
+    if "success" in diagnostics and not diagnostics["success"].fillna(False).all():
+        errors.append("Falha de otimização registrada nos diagnósticos.")
+    feasible = diagnostics["target_feasible"].fillna(False)
+    violations = diagnostics.loc[
+        feasible
+        & (
+            diagnostics["annual_volatility"]
+            > diagnostics["target_volatility"] + 1e-6
+        )
+    ]
+    for _, row in violations.iterrows():
+        errors.append(
+            f"[{row['strategy']}] {pd.Timestamp(row['rebalance_date']).date()}: "
+            "volatilidade excede o alvo declarado."
+        )
+    infeasible = diagnostics.loc[~diagnostics["target_feasible"].fillna(False)]
+    for _, row in infeasible.iterrows():
+        warnings.append(
+            f"[{row['strategy']}] {pd.Timestamp(row['rebalance_date']).date()}: "
+            f"alvo={row['target_volatility']:.3f} inviável; "
+            f"mínimo={row['minimum_volatility']:.3f}."
+        )
     return errors, warnings
 
 
@@ -123,73 +97,54 @@ def validate_backtest_consistency(
     weights_dict: Dict[str, pd.DataFrame],
     daily_returns: pd.DataFrame,
 ) -> Tuple[List[str], List[str]]:
-    """
-    Valida se o backtest é matematicamente consistente com os pesos e retornos.
-    """
     errors = []
-
-    for name, bt in backtest_results.items():
-        wdf = weights_dict.get(name)
-        if wdf is None:
-            continue
-
-        pv = bt["portfolio_value"]
-        daily_rets = bt["daily_return"]
-
-        # 1. Patrimônio deve ser sempre positivo
-        if (pv <= 0).any():
+    warnings = []
+    for name, backtest in backtest_results.items():
+        if name not in weights_dict:
+            errors.append(f"[{name}] Backtest sem tabela de pesos correspondente.")
+        if not backtest.index.is_unique or not backtest.index.is_monotonic_increasing:
+            errors.append(f"[{name}] Datas do backtest duplicadas ou desordenadas.")
+        if not backtest.index.isin(daily_returns.index).all():
+            errors.append(f"[{name}] Backtest contém datas ausentes nos retornos.")
+        values = backtest["portfolio_value"]
+        returns = backtest["daily_return"]
+        if (values <= 0).any():
             errors.append(f"[{name}] Patrimônio <= 0 detectado.")
+        if returns.max() > 2.0 or returns.min() <= -1.0:
+            errors.append(f"[{name}] Retorno diário fora do intervalo plausível.")
+        implied = values.pct_change(fill_method=None).dropna()
+        recorded = returns.reindex(implied.index).dropna()
+        difference = (implied.reindex(recorded.index) - recorded).abs().max()
+        if pd.notna(difference) and difference > 1e-10:
+            errors.append(
+                f"[{name}] Inconsistência entre retorno simples e patrimônio: "
+                f"diff={difference:.12f}"
+            )
+        drawdown = ((values - values.cummax()) / values.cummax()).min()
+        if drawdown < -1.0:
+            errors.append(f"[{name}] Drawdown abaixo de -100%.")
+        if "stale_positions" in backtest and backtest["stale_positions"].sum() > 0:
+            message = (
+                f"[{name}] {int(backtest['stale_positions'].sum())} posição(ões)-dia "
+                "sem nova cotação foram mantidas pelo último valor."
+            )
+            if CONFIG["backtest"].get("stale_positions_are_errors", True):
+                errors.append(message)
+            else:
+                warnings.append(message)
+    missing_backtests = set(weights_dict) - set(backtest_results)
+    for name in sorted(missing_backtests):
+        errors.append(f"[{name}] Tabela de pesos sem backtest correspondente.")
+    return errors, warnings
 
-        # 2. Retornos diários devem estar em ranges razoáveis para cripto
-        if daily_rets.max() > 2.0:  # +200%
-            errors.append(f"[{name}] Retorno diário máximo suspeito: {daily_rets.max():.2f}")
-        if daily_rets.min() < -0.90:  # -90%
-            errors.append(f"[{name}] Retorno diário mínimo suspeito: {daily_rets.min():.2f}")
 
-        # 3. Consistência: P_t / P_{t-1} ≈ exp(r_t)
-        # Tolerância maior (1e-2) pois dias com NaN em alguns ativos
-        # introduzem pequenas diferenças numéricas no backtest.
-        implied_rets = np.log(pv / pv.shift(1)).dropna()
-        actual_rets = daily_rets.dropna()
-        diff = (implied_rets - actual_rets).abs().max()
-        if diff > 1e-2:
-            errors.append(f"[{name}] Inconsistência entre retornos e patrimônio: diff={diff:.6f}")
-
-        # 4. Drawdown máximo não pode exceder 100%
-        mdd = ((pv - pv.cummax()) / pv.cummax()).min()
-        if mdd < -1.0:
-            errors.append(f"[{name}] Drawdown < -100% ({mdd:.2f}) — impossível.")
-
-    return errors, []
-
-
-def validate_metrics(
-    metrics_df: pd.DataFrame,
-) -> Tuple[List[str], List[str]]:
-    """
-    Sanity checks nas métricas de desempenho finais.
-    """
+def validate_metrics(metrics_df: pd.DataFrame) -> Tuple[List[str], List[str]]:
     errors = []
-
-    for strategy in metrics_df.index:
-        row = metrics_df.loc[strategy]
-
-        total = row["total_return"]
-        if not (-1.0 <= total <= 10.0):  # -100% a +1000%
-            errors.append(f"[{strategy}] Retorno total suspeito: {total:.2f}")
-
-        vol = row["annualized_volatility"]
-        if vol < 1e-6:
-            errors.append(f"[{strategy}] Volatilidade anualizada ≈ 0 — verificar.")
-
-        sharpe = row["sharpe_ratio"]
-        if not np.isfinite(sharpe):
-            errors.append(f"[{strategy}] Sharpe Ratio não-finito.")
-
-        calmar = row["calmar_ratio"]
-        if not np.isfinite(calmar):
-            errors.append(f"[{strategy}] Calmar Ratio não-finito.")
-
+    for strategy, row in metrics_df.iterrows():
+        if not -1.0 <= row["total_return"] <= 10.0:
+            errors.append(f"[{strategy}] Retorno total suspeito.")
+        if row["annualized_volatility"] < 1e-6:
+            errors.append(f"[{strategy}] Volatilidade anualizada próxima de zero.")
     return errors, []
 
 
@@ -199,93 +154,44 @@ def run_all_validations(
     daily_returns: pd.DataFrame,
     metrics_df: pd.DataFrame,
     profiles: Dict,
+    optimization_diagnostics: Optional[pd.DataFrame] = None,
 ) -> bool:
-    """
-    Executa todas as validações e imprime relatório.
-    Retorna True se não houver erros (avisos não impedem aprovação).
-    """
+    expected_strategies = {*profiles, "benchmark"}
+    actual_strategies = set(weights_dict)
+    strategy_errors = []
+    if actual_strategies != expected_strategies:
+        strategy_errors.append(
+            "Estratégias produzidas diferem das configuradas: "
+            f"esperadas={sorted(expected_strategies)}, obtidas={sorted(actual_strategies)}."
+        )
+    checks = [
+        ("Estratégias", strategy_errors, []),
+        ("Pesos", *validate_weights(weights_dict)),
+        (
+            "Constituintes históricos",
+            *validate_historical_constituents(weights_dict),
+        ),
+        ("Alvos de risco e PSD", *validate_risk_targets(optimization_diagnostics)),
+        (
+            "Backtest",
+            *validate_backtest_consistency(backtest_results, weights_dict, daily_returns),
+        ),
+        ("Métricas", *validate_metrics(metrics_df)),
+    ]
+    all_errors = []
+    warning_count = 0
     print("\n" + "=" * 60)
     print("VALIDAÇÃO DO EXPERIMENTO")
     print("=" * 60)
-
-    checks = [
-        ("Pesos Otimizados", *validate_weights(weights_dict)),
-        ("Restrição de Correlação", *validate_correlation_constraint(weights_dict, daily_returns, profiles)),
-        ("Consistência do Backtest", *validate_backtest_consistency(backtest_results, weights_dict, daily_returns)),
-        ("Métricas de Desempenho", *validate_metrics(metrics_df)),
-    ]
-
-    passed = 0
-    failed = 0
-    total_warnings = 0
-    all_errors = []
-
-    for check_name, errors, warnings in checks:
-        print(f"\n[{check_name}]")
-        has_issue = False
-
-        if errors:
-            has_issue = True
-            failed += 1
-            for err in errors[:5]:
-                print(f"  ❌ {err}")
-            if len(errors) > 5:
-                print(f"  ... e mais {len(errors) - 5} erro(s)")
-            all_errors.extend(errors)
-
-        if warnings:
-            has_issue = True
-            total_warnings += len(warnings)
-            for warn in warnings[:5]:
-                print(f"  ⚠️  {warn}")
-            if len(warnings) > 5:
-                print(f"  ... e mais {len(warnings) - 5} aviso(s)")
-
-        if not has_issue:
-            passed += 1
-            print("  ✅ Sem erros nem avisos.")
-
-    print("\n" + "=" * 60)
-    if all_errors:
-        print(f"RESULTADO: {failed}/{len(checks)} verificações falharam ({len(all_errors)} erro(s)).")
-        print("=" * 60)
-        return False
-    else:
-        print(f"RESULTADO: {len(checks)} verificações aprovadas ({total_warnings} aviso(s) informativo(s)).")
-        print("=" * 60)
-        return True
-
-
-if __name__ == "__main__":
-    # Teste rápido com dados dummy
-    import yaml
-
-    config_path = Path(__file__).resolve().parents[1] / "config.yaml"
-    with open(config_path, "r") as f:
-        cfg = yaml.safe_load(f)
-
-    dates = pd.date_range("2023-01-01", "2023-12-31", freq="B")
-    assets = ["A", "B", "C"]
-    rets = pd.DataFrame(np.random.normal(0.001, 0.02, (len(dates), 3)), index=dates, columns=assets)
-
-    w = pd.DataFrame({"A": [0.4], "B": [0.4], "C": [0.2]}, index=[dates[0]])
-    weights = {"teste": w}
-
-    pv = pd.Series(10000 * np.exp(rets.sum(axis=1).cumsum()), index=dates)
-    bt = pd.DataFrame({"portfolio_value": pv, "daily_return": rets.sum(axis=1)}, index=dates)
-    backtests = {"teste": bt}
-
-    metrics = pd.DataFrame(
-        {
-            "total_return": [0.5],
-            "annualized_return": [0.5],
-            "annualized_volatility": [0.3],
-            "sharpe_ratio": [1.0],
-            "max_drawdown": [-0.2],
-            "calmar_ratio": [2.5],
-        },
-        index=["teste"],
-    )
-
-    profiles = cfg["profiles"]
-    run_all_validations(weights, backtests, rets, metrics, profiles)
+    for name, errors, warnings in checks:
+        print(f"\n[{name}]")
+        for error in errors[:5]:
+            print(f"  ERRO: {error}")
+        for warning in warnings[:5]:
+            print(f"  AVISO: {warning}")
+        if not errors and not warnings:
+            print("  Aprovado.")
+        all_errors.extend(errors)
+        warning_count += len(warnings)
+    print(f"\nErros: {len(all_errors)} | Avisos: {warning_count}")
+    return not all_errors

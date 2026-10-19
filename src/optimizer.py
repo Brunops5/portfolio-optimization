@@ -1,332 +1,314 @@
-"""
-Módulo de otimização de portfólio com restrição de correlação média máxima.
+"""Otimização rolling de Markowitz orientada a perfis de volatilidade."""
 
-Framework: PyPortfolioOpt (pypfopt) para cálculo de inputs (retornos esperados,
-matriz de covariância, bounds e estrutura de restrições). A otimização propriamente
-dita é realizada via scipy.optimize (SLSQP) para incorporar a restrição customizada
-de correlação média máxima — uma extensão ao modelo mean-variance padrão.
-
-Referências:
-    - Martin, R. A. (2021). PyPortfolioOpt: portfolio optimisation in Python.
-    - Markowitz, H. (1952). Portfolio Selection.
-"""
-
-import yaml
-import numpy as np
-import pandas as pd
 from pathlib import Path
-from scipy.optimize import minimize
 from typing import Dict, Optional, Tuple
 
-# PyPortfolioOpt — framework base para otimização de portfólio
-from pypfopt import expected_returns, risk_models
-from pypfopt.efficient_frontier import EfficientFrontier
-
+import numpy as np
+import pandas as pd
+import yaml
+from pypfopt import EfficientFrontier, expected_returns, risk_models
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
-with open(CONFIG_PATH, "r") as f:
-    CONFIG = yaml.safe_load(f)
+with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+    CONFIG = yaml.safe_load(config_file)
+ANNUALIZATION_FACTOR = 365
 
-RISK_FREE_DAILY = CONFIG["optimization"]["risk_free_rate_annual"] / 365
+
+def load_constituent_history(path: Optional[Path] = None) -> pd.DataFrame:
+    """Carrega e valida a composição point-in-time do NCI."""
+    path = path or CONFIG_PATH.parent / CONFIG["paths"]["constituent_history"]
+    with Path(path).open("r", encoding="utf-8") as file:
+        document = yaml.safe_load(file)
+
+    rows = document.get("schedule", []) if isinstance(document, dict) else []
+    if not rows:
+        raise ValueError("O histórico de constituintes do NCI está vazio.")
+    history = pd.DataFrame(rows)
+    required_columns = {"effective_date", "quarter", "constituents"}
+    if not required_columns.issubset(history.columns):
+        raise ValueError("Histórico do NCI sem os campos obrigatórios.")
+    history["effective_date"] = pd.to_datetime(history["effective_date"])
+    if history["effective_date"].duplicated().any():
+        raise ValueError("Datas efetivas duplicadas no histórico do NCI.")
+    history = history.sort_values("effective_date").set_index("effective_date")
+    history["constituents"] = history["constituents"].map(tuple)
+
+    historical_assets = {
+        asset for constituents in history["constituents"] for asset in constituents
+    }
+    missing_assets = historical_assets - set(CONFIG["assets"])
+    if missing_assets:
+        raise ValueError(
+            "Constituintes históricos ausentes de config.assets: "
+            f"{sorted(missing_assets)}"
+        )
+    return history
 
 
-def weighted_average_correlation(weights: np.ndarray, corr_matrix: np.ndarray) -> float:
+def constituent_record_for_date(history: pd.DataFrame, date: pd.Timestamp) -> pd.Series:
+    """Retorna o último universo do NCI que já era efetivo na data."""
+    available = history.loc[history.index <= pd.Timestamp(date)]
+    if available.empty:
+        raise ValueError(f"Não há composição do NCI vigente em {date}.")
+    return available.iloc[-1]
+
+
+def estimate_inputs(simple_returns: pd.DataFrame) -> Tuple[pd.Series, pd.DataFrame, Dict]:
+    """Estima retorno e covariância anualizados com as funções padrão da lib.
+
+    Usa ``expected_returns.mean_historical_return`` e ``risk_models.sample_cov``
+    do PyPortfolioOpt com os argumentos padrão; apenas ``frequency=365`` é fixado
+    explicitamente, seguindo a convenção de anualização do projeto para mercados
+    que operam continuamente. Em seguida, a covariância passa por
+    ``risk_models.fix_nonpositive_semidefinite`` (método espectral), garantia
+    numérica exigida metodologicamente; os autovalores extremos antes e depois
+    da correção ficam registrados no diagnóstico.
     """
-    Calcula a correlação média ponderada de uma carteira.
+    if simple_returns.empty or simple_returns.shape[1] < 2:
+        raise ValueError("São necessários retornos de pelo menos dois ativos.")
+    if simple_returns.isna().any().any():
+        raise ValueError("A janela de estimação contém valores ausentes.")
 
-    Fórmula:
-        ρ̄(w) = Σ_i Σ_{j>i} w_i w_j ρ_{ij} / Σ_i Σ_{j>i} w_i w_j
+    mu = expected_returns.mean_historical_return(
+        simple_returns,
+        returns_data=True,
+        frequency=ANNUALIZATION_FACTOR,
+    )
+    # ``sample_cov`` já corrige matrizes não PSD internamente. A matriz bruta é
+    # calculada separadamente apenas para tornar o diagnóstico antes/depois real.
+    raw_covariance = simple_returns.cov() * ANNUALIZATION_FACTOR
+    min_eigenvalue_before = float(np.linalg.eigvalsh(raw_covariance.values).min())
+    covariance = risk_models.sample_cov(
+        simple_returns,
+        returns_data=True,
+        frequency=ANNUALIZATION_FACTOR,
+        fix_method="spectral",
+    )
+    min_eigenvalue_after = float(np.linalg.eigvalsh(covariance.values).min())
 
-    Args:
-        weights: Vetor de pesos (n_assets,).
-        corr_matrix: Matriz de correlação de Pearson (n_assets, n_assets).
-
-    Returns:
-        Correlação média ponderada (float entre -1 e 1).
-    """
-    n = len(weights)
-    numerator = 0.0
-    denominator = 0.0
-    for i in range(n):
-        for j in range(i + 1, n):
-            prod = weights[i] * weights[j]
-            numerator += prod * corr_matrix[i, j]
-            denominator += prod
-    if denominator < 1e-12:
-        return 0.0
-    return numerator / denominator
-
-
-def negative_sharpe_pypfopt(
-    weights: np.ndarray,
-    mu: np.ndarray,
-    S: np.ndarray,
-    risk_free: float = RISK_FREE_DAILY,
-) -> float:
-    """
-    Função objetivo: negativo do Sharpe Ratio anualizado (para minimização).
-
-    Usa as convenções do PyPortfolioOpt:
-        - mu: retornos esperados anualizados
-        - S: matriz de covariância anualizada
-        - weights: pesos do portfólio
-        - risk_free: taxa livre de risco anualizada
-
-    Como mu e S já são anualizados pelo pypfopt, o Sharpe calculado aqui
-    já é anualizado. O termo risk_free * 365 equivale à taxa livre de risco
-    anualizada quando risk_free é a taxa diária.
-    """
-    port_return = np.dot(weights, mu)
-    port_volatility = np.sqrt(np.dot(weights.T, np.dot(S, weights)))
-    if port_volatility < 1e-12:
-        return 0.0
-    return -(port_return - risk_free * 365) / port_volatility
-
-
-def portfolio_variance_pypfopt(weights: np.ndarray, S: np.ndarray) -> float:
-    """Função objetivo: variância anualizada do portfólio (convenção pypfopt)."""
-    return np.dot(weights.T, np.dot(S, weights))
+    diagnostics = {
+        "min_eigenvalue_before": min_eigenvalue_before,
+        "min_eigenvalue_after": min_eigenvalue_after,
+        "covariance_psd": min_eigenvalue_after >= -1e-10,
+    }
+    return mu, covariance, diagnostics
 
 
 def optimize_portfolio(
-    returns: pd.DataFrame,
-    max_avg_correlation: float,
-    objective: str = "max_sharpe",
+    simple_returns: pd.DataFrame,
+    target_volatility: float,
     min_weight: float = 0.0,
-    max_weight: float = 0.40,
-    risk_free_annual: Optional[float] = None,
+    max_weight: float = 1.0,
 ) -> Tuple[np.ndarray, Dict]:
+    """Maximiza retorno esperado sob um limite anual de volatilidade.
+
+    Quando o alvo é inviável, retorna a carteira de mínima volatilidade e sinaliza
+    explicitamente ``target_feasible=False``. Isso mantém o backtest executável sem
+    esconder que o perfil não pôde ser atendido naquela janela.
     """
-    Otimiza um portfólio com restrição de correlação média máxima.
+    if target_volatility <= 0:
+        raise ValueError("target_volatility deve ser positivo.")
+    if not 0 <= min_weight <= max_weight <= 1:
+        raise ValueError("Os limites de peso devem satisfazer 0 <= min <= max <= 1.")
 
-    Utiliza PyPortfolioOpt para cálculo dos inputs (retornos esperados e
-    covariância anualizados) e scipy.optimize (SLSQP) para a otimização com
-    a restrição customizada de correlação média — uma extensão ao modelo
-    mean-variance clássico.
+    mu, covariance, covariance_info = estimate_inputs(simple_returns)
+    bounds = (min_weight, max_weight)
 
-    Args:
-        returns: DataFrame de retornos diários da janela de estimação.
-        max_avg_correlation: Limite superior para a correlação média.
-        objective: "max_sharpe" ou "min_volatility".
-        min_weight: Peso mínimo por ativo.
-        max_weight: Peso máximo por ativo.
-        risk_free_annual: Taxa livre de risco anualizada.
+    minimum_frontier = EfficientFrontier(mu, covariance, weight_bounds=bounds)
+    minimum_frontier.min_volatility()
+    minimum_volatility = float(minimum_frontier.portfolio_performance()[1])
 
-    Returns:
-        weights: Vetor de pesos ótimos.
-        info: Dict com métricas da otimização.
-    """
-    n_assets = returns.shape[1]
-    assets = returns.columns.tolist()
-
-    if risk_free_annual is None:
-        risk_free_annual = CONFIG["optimization"]["risk_free_rate_annual"]
-    risk_free_daily = risk_free_annual / 365
-
-
-    # PyPortfolioOpt: cálculo dos inputs da otimização
-    
-    # Recupera preços a partir de retornos logarítmicos para usar as
-    # funções do pypfopt (que esperam séries de preços).
-    # Retornos log: r_t = ln(P_t / P_{t-1})  =>  P_t = P_0 * exp(cumsum(r_t))
-    # Usamos P_0 = 1.0 para todos os ativos (arbitrário para covariância).
-    prices = np.exp(returns.cumsum())
-    prices.iloc[0] = 1.0  # Garante preço inicial unitário
-
-    # Retornos esperados anualizados (mean historical return)
-    mu = expected_returns.mean_historical_return(prices, frequency=365).values
-
-    # Matriz de covariância anualizada (amostral)
-    S = risk_models.sample_cov(prices, frequency=365).values
-
-    # Matriz de correlação de Pearson
-    corr_matrix = returns.corr().values
-    corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=1.0, neginf=-1.0)
-    np.fill_diagonal(corr_matrix, 1.0)
-
-    
-    # Restrições scipy.optimize
-   
-    constraints = [
-        {"type": "eq", "fun": lambda w: np.sum(w) - 1.0},  # soma = 1
-    ]
-
-    def corr_constraint(w):
-        return max_avg_correlation - weighted_average_correlation(w, corr_matrix)
-
-    constraints.append({"type": "ineq", "fun": corr_constraint})
-
-    bounds = tuple((min_weight, max_weight) for _ in range(n_assets))
-    x0 = np.array([1.0 / n_assets] * n_assets)
-
-    if objective == "max_sharpe":
-        obj_fun = lambda w: negative_sharpe_pypfopt(w, mu, S, risk_free_daily)
-    elif objective == "min_volatility":
-        obj_fun = lambda w: portfolio_variance_pypfopt(w, S)
+    target_feasible = target_volatility + 1e-7 >= minimum_volatility
+    if target_feasible:
+        frontier = EfficientFrontier(mu, covariance, weight_bounds=bounds)
+        frontier.efficient_risk(target_volatility=float(target_volatility))
+        weights = frontier.weights
+        message = "ok"
     else:
-        raise ValueError(f"Objetivo '{objective}' não suportado.")
-
-    result = minimize(
-        obj_fun,
-        x0,
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints,
-        options={"ftol": 1e-9, "maxiter": 1000, "disp": False},
-    )
-
-    if not result.success:
-        # Fallback: otimização sem restrição de correlação (relaxada)
-        print(
-            f"[AVISO] Otimização com corr ≤ {max_avg_correlation} falhou. "
-            f"Tentando sem restrição de correlação..."
-        )
-        result = minimize(
-            obj_fun,
-            x0,
-            method="SLSQP",
-            bounds=bounds,
-            constraints=[constraints[0]],  # apenas soma = 1
-            options={"ftol": 1e-9, "maxiter": 1000, "disp": False},
+        weights = minimum_frontier.weights
+        message = (
+            f"alvo inviável ({target_volatility:.4f}); "
+            f"mínima volatilidade={minimum_volatility:.4f}"
         )
 
-    weights = result.x
-    weights = np.maximum(weights, 0)
+    weights = np.asarray(weights, dtype=float)
+    weights[np.abs(weights) < 1e-10] = 0.0
     weights /= weights.sum()
 
-    # Métricas da carteira resultante (usando mu e S anualizados do pypfopt)
-    port_return = np.dot(weights, mu)
-    port_vol = np.sqrt(np.dot(weights.T, np.dot(S, weights)))
-    avg_corr = weighted_average_correlation(weights, corr_matrix)
-
+    portfolio_return = float(weights @ mu.values)
+    portfolio_volatility = float(np.sqrt(weights @ covariance.values @ weights))
     info = {
-        "success": result.success,
-        "message": result.message,
-        "expected_daily_return": float(port_return / 365),
-        "expected_annual_return": float(port_return),
-        "daily_volatility": float(port_vol / np.sqrt(365)),
-        "annual_volatility": float(port_vol),
-        "sharpe_ratio": float(
-            (port_return - risk_free_annual) / port_vol if port_vol > 1e-12 else 0.0
-        ),
-        "avg_correlation": float(avg_corr),
+        "success": True,
+        "message": message,
+        "objective": "max_return_for_target_volatility",
+        "target_volatility": float(target_volatility),
+        "target_feasible": bool(target_feasible),
+        "minimum_volatility": minimum_volatility,
+        "expected_annual_return": portfolio_return,
+        "annual_volatility": portfolio_volatility,
         "num_assets_selected": int((weights > 1e-6).sum()),
+        "max_weight_observed": float(weights.max()),
+        **covariance_info,
     }
-
     return weights, info
+
+
+def _rebalance_dates(
+    daily_returns: pd.DataFrame, window_months: int, frequency: str
+) -> pd.DatetimeIndex:
+    """Primeiro dia observado de cada período após a janela inicial."""
+    observed_dates = pd.Series(daily_returns.index, index=daily_returns.index)
+    # ``closed='left'`` faz W-MON representar [segunda, segunda seguinte),
+    # evitando o comportamento padrão do pandas, que agruparia terça a segunda.
+    first_observed_by_period = (
+        observed_dates.resample(frequency, closed="left", label="left").min().dropna()
+    )
+    first_allowed = (
+        daily_returns.index.min().to_period("M") + window_months
+    ).start_time
+    return pd.DatetimeIndex(
+        first_observed_by_period.loc[first_observed_by_period >= first_allowed].to_numpy()
+    )
+
+
+def prepare_estimation_window(
+    daily_returns: pd.DataFrame,
+    rebalance_date: pd.Timestamp,
+    constituent_history: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.Series, list[str]]:
+    """Constrói a janela e o universo elegível usados por cálculo e relatório."""
+    constituent_record = constituent_record_for_date(constituent_history, rebalance_date)
+    active_constituents = list(constituent_record["constituents"])
+    missing_columns = set(active_constituents) - set(daily_returns.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Constituintes do NCI sem série em {rebalance_date.date()}: "
+            f"{sorted(missing_columns)}"
+        )
+
+    window_start = rebalance_date - pd.DateOffset(
+        months=CONFIG["estimation_window_months"]
+    )
+    window = daily_returns.loc[
+        (daily_returns.index >= window_start) & (daily_returns.index < rebalance_date)
+    ]
+    recent_cutoff = rebalance_date - pd.Timedelta(
+        days=CONFIG["optimization"]["max_data_gap_days"]
+    )
+    eligible = []
+    for asset in active_constituents:
+        observations = window[asset].dropna()
+        if (
+            len(observations) >= CONFIG["optimization"]["min_observations"]
+            and observations.index.max() >= recent_cutoff
+        ):
+            eligible.append(asset)
+    return window[eligible].dropna(how="any"), constituent_record, eligible
 
 
 def run_rolling_optimization(
     daily_returns: pd.DataFrame,
-    monthly_returns: pd.DataFrame,
     profiles: Optional[Dict] = None,
-) -> Dict[str, pd.DataFrame]:
-    """
-    Executa otimização mensal com janela deslizante de 12 meses.
-
-    Args:
-        daily_returns: Retornos diários completos.
-        monthly_returns: Retornos mensais completos (para alinhamento de datas).
-        profiles: Dict de perfis do config.yaml.
-
-    Returns:
-        Dict com DataFrames de pesos para cada perfil + benchmark.
-    """
+    constituent_history: Optional[pd.DataFrame] = None,
+) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+    """Otimiza no início de cada período usando somente a janela anterior."""
     if profiles is None:
         profiles = CONFIG["profiles"]
+    if constituent_history is None:
+        constituent_history = load_constituent_history()
 
+    opt_cfg = CONFIG["optimization"]
     window_months = CONFIG["estimation_window_months"]
-    months = monthly_returns.index
+    rebalance_frequency = CONFIG["rebalance_frequency"]
+    min_observations = opt_cfg["min_observations"]
     all_assets = daily_returns.columns.tolist()
 
-    all_weights = {name: [] for name in list(profiles.keys()) + ["benchmark"]}
-    rebalance_dates = []
+    by_strategy = {name: [] for name in [*profiles, "benchmark"]}
+    accepted_dates = []
+    diagnostics = []
 
-    for i in range(window_months, len(months)):
-        rebalance_date = months[i]
-        window_start = months[i - window_months]
-        window_end = months[i - 1]
-
-        # Seleciona dados diários dentro da janela
-        mask = (daily_returns.index >= window_start) & (daily_returns.index <= window_end)
-        window_returns = daily_returns.loc[mask].dropna(how="all", axis=1)
-        # Remove ativos com menos de 60 observações na janela
-        window_returns = window_returns.loc[:, window_returns.count() >= 60]
-
-        if window_returns.empty or window_returns.shape[1] < 2:
+    for rebalance_date in _rebalance_dates(
+        daily_returns, window_months, rebalance_frequency
+    ):
+        estimation_returns, constituent_record, eligible = prepare_estimation_window(
+            daily_returns, rebalance_date, constituent_history
+        )
+        active_constituents = list(constituent_record["constituents"])
+        window_start = rebalance_date - pd.DateOffset(months=window_months)
+        if estimation_returns.shape[1] < 2 or len(estimation_returns) < min_observations:
             print(f"[PULAR] Dados insuficientes em {rebalance_date.date()}")
             continue
 
-        rebalance_dates.append(rebalance_date)
-        assets_in_window = window_returns.columns.tolist()
+        accepted_dates.append(rebalance_date)
         print(
             f"\n[REBALANCEAMENTO] {rebalance_date.date()} | "
-            f"Janela: {window_start.date()} a {window_end.date()} | "
-            f"Ativos: {assets_in_window}"
+            f"Janela: {window_start.date()} a {(rebalance_date - pd.Timedelta(days=1)).date()} | "
+            f"Ativos: {eligible}"
         )
-
         for profile_key, profile_cfg in profiles.items():
+            target_volatility = profile_cfg["target_volatility"]
+            profile_name = profile_cfg["name"]
             try:
-                w, info = optimize_portfolio(
-                    window_returns,
-                    max_avg_correlation=profile_cfg["max_avg_correlation"],
-                    objective=CONFIG["optimization"]["objective"],
-                    min_weight=CONFIG["optimization"]["min_weight"],
-                    max_weight=CONFIG["optimization"]["max_weight"],
+                weights, info = optimize_portfolio(
+                    estimation_returns,
+                    target_volatility=target_volatility,
+                    min_weight=opt_cfg["min_weight"],
+                    max_weight=opt_cfg["max_weight"],
                 )
-                print(
-                    f"  {profile_cfg['name']:12s}: Sharpe={info['sharpe_ratio']:.3f}, "
-                    f"AvgCorr={info['avg_correlation']:.3f}, "
-                    f"Ativos={info['num_assets_selected']}"
-                )
-                # Alinha com all_assets (preenche zero para ativos fora da janela)
-                w_aligned = pd.Series(0.0, index=all_assets)
-                w_aligned[assets_in_window] = w
-                all_weights[profile_key].append(w_aligned.values)
-            except Exception as e:
-                print(f"  [ERRO] {profile_cfg['name']}: {e}")
-                all_weights[profile_key].append(np.full(len(all_assets), np.nan))
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Falha ao otimizar {profile_name} em {rebalance_date.date()}: {exc}"
+                ) from exc
 
-        # Benchmark: alocação igualitária entre ativos disponíveis na janela
-        bench_w = pd.Series(0.0, index=all_assets)
-        bench_w[assets_in_window] = 1.0 / len(assets_in_window)
-        all_weights["benchmark"].append(bench_w.values)
+            aligned = pd.Series(0.0, index=all_assets)
+            aligned[eligible] = weights
+            by_strategy[profile_key].append(aligned.values)
+            diagnostics.append(
+                {
+                    "rebalance_date": rebalance_date,
+                    "strategy": profile_key,
+                    "observations": len(estimation_returns),
+                    "nci_effective_date": constituent_record.name,
+                    "nci_quarter": constituent_record["quarter"],
+                    "nci_constituent_count": len(active_constituents),
+                    "eligible_count": len(eligible),
+                    "excluded_constituents": "|".join(
+                        sorted(set(active_constituents) - set(eligible))
+                    ),
+                    **info,
+                }
+            )
+            status = "" if info["target_feasible"] else " [ALVO INVIÁVEL]"
+            print(
+                f"  {profile_name:12s}: "
+                f"vol={info['annual_volatility']:.3f}/{info['target_volatility']:.3f}, "
+                f"ativos={info['num_assets_selected']}{status}"
+            )
 
-    # Constrói DataFrames de pesos com colunas fixas (all_assets)
-    result = {}
-    for key in list(profiles.keys()) + ["benchmark"]:
-        if not all_weights[key]:
-            continue
-        df = pd.DataFrame(
-            all_weights[key],
-            index=rebalance_dates,
-            columns=all_assets,
-        )
-        result[key] = df
+        benchmark = pd.Series(0.0, index=all_assets)
+        benchmark[eligible] = 1.0 / len(eligible)
+        by_strategy["benchmark"].append(benchmark.values)
 
-    return result
+    result = {
+        name: pd.DataFrame(values, index=accepted_dates, columns=all_assets)
+        for name, values in by_strategy.items()
+        if values
+    }
+    return result, pd.DataFrame(diagnostics)
 
 
 def save_weights(weights_dict: Dict[str, pd.DataFrame], outdir: Path) -> None:
-    """Persiste os pesos em CSV."""
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    for name, df in weights_dict.items():
+    for name, dataframe in weights_dict.items():
         path = outdir / f"weights_{name}.csv"
-        df.to_csv(path)
+        dataframe.to_csv(path)
         print(f"[SALVO] Pesos {name}: {path}")
 
 
-if __name__ == "__main__":
-    # Teste rápido com dados dummy
-    np.random.seed(42)
-    dates = pd.date_range("2022-01-01", "2024-12-31", freq="B")
-    assets = ["BTC", "ETH", "SOL"]
-    rets = pd.DataFrame(
-        np.random.normal(0.001, 0.03, (len(dates), 3)),
-        index=dates,
-        columns=assets,
-    )
-    w, info = optimize_portfolio(rets, max_avg_correlation=0.70)
-    print("Pesos:", dict(zip(assets, np.round(w, 4))))
-    print("Info:", info)
+def save_optimization_diagnostics(diagnostics: pd.DataFrame, outdir: Path) -> None:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    path = outdir / "optimization_diagnostics.csv"
+    diagnostics.to_csv(path, index=False)
+    print(f"[SALVO] Diagnósticos da otimização em {path}")

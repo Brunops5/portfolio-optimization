@@ -13,7 +13,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from stats_tests import (
-    monthly_returns_from_backtest,
+    periodic_returns_from_backtest,
     wilcoxon_comparison,
 )
 
@@ -27,13 +27,17 @@ class TestMonthlyReturnsFromBacktest:
         # Patrimônio dobra a cada mês
         pv_values = np.exp(np.linspace(0, 1.5, len(dates)))
         bt = pd.DataFrame(
-            {"portfolio_value": pv_values},
+            {
+                "portfolio_value": pv_values,
+                "daily_return": pd.Series(pv_values, index=dates)
+                .pct_change(fill_method=None)
+                .fillna(0.0),
+            },
             index=dates,
         )
-        monthly = monthly_returns_from_backtest(bt)
+        monthly = periodic_returns_from_backtest(bt, frequency="ME")
 
-        # O primeiro retorno mensal deve ser ln(P_fev / P_jan)
-        assert len(monthly) == 2
+        assert len(monthly) == 3
         assert np.all(np.isfinite(monthly))
 
     def test_matches_manual_calculation(self):
@@ -41,14 +45,55 @@ class TestMonthlyReturnsFromBacktest:
         dates = pd.date_range("2023-01-01", "2023-04-30", freq="B")
         # Valores fixos no último dia de cada mês
         values = np.linspace(100, 200, len(dates))
-        bt = pd.DataFrame({"portfolio_value": values}, index=dates)
-        monthly = monthly_returns_from_backtest(bt)
+        bt = pd.DataFrame(
+            {
+                "portfolio_value": values,
+                "daily_return": pd.Series(values, index=dates)
+                .pct_change(fill_method=None)
+                .fillna(0.0),
+            },
+            index=dates,
+        )
+        monthly = periodic_returns_from_backtest(bt, frequency="ME")
 
         jan_end = bt["portfolio_value"].resample("ME").last().iloc[0]
         feb_end = bt["portfolio_value"].resample("ME").last().iloc[1]
         expected = np.log(feb_end / jan_end)
 
-        assert monthly.iloc[0] == pytest.approx(expected)
+        assert monthly.loc[pd.Timestamp("2023-02-28")] == pytest.approx(expected)
+
+    def test_preserves_first_month(self):
+        dates = pd.date_range("2023-01-01", "2023-02-28", freq="D")
+        daily = pd.Series(0.01, index=dates)
+        bt = pd.DataFrame({"daily_return": daily})
+        monthly = periodic_returns_from_backtest(bt, frequency="ME")
+
+        assert list(monthly.index) == [
+            pd.Timestamp("2023-01-31"),
+            pd.Timestamp("2023-02-28"),
+        ]
+        assert monthly.iloc[0] == pytest.approx(31 * np.log(1.01))
+
+    def test_weekly_non_overlapping_returns(self):
+        dates = pd.date_range("2023-01-02", periods=14, freq="D")
+        daily = pd.Series(0.01, index=dates)
+        backtest = pd.DataFrame({"daily_return": daily})
+
+        weekly = periodic_returns_from_backtest(backtest, frequency="W-SUN")
+
+        assert list(weekly.index) == [
+            pd.Timestamp("2023-01-08"),
+            pd.Timestamp("2023-01-15"),
+        ]
+        assert np.allclose(weekly.to_numpy(), 7 * np.log(1.01))
+
+    def test_weekly_drops_partial_last_week(self):
+        dates = pd.date_range("2023-01-02", periods=10, freq="D")
+        backtest = pd.DataFrame({"daily_return": 0.01}, index=dates)
+
+        weekly = periodic_returns_from_backtest(backtest, frequency="W-SUN")
+
+        assert list(weekly.index) == [pd.Timestamp("2023-01-08")]
 
 
 class TestWilcoxonComparison:

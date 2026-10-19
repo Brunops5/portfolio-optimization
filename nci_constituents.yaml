@@ -1,0 +1,62 @@
+# Composição histórica do Nasdaq Crypto Index (NCI).
+# Fonte: gráfico "NCI Number of Constituents per Quarter since Launch",
+# Nasdaq CME Crypto Index Overview, consultado em 19-09-2026.
+# https://www.nasdaq.com/docs/index/nci-overview-q2-2026
+#
+# A data efetiva é o primeiro dia útil de março, junho, setembro ou dezembro,
+# conforme a metodologia. A entrada de 12-2021 é necessária para determinar o
+# universo vigente em janeiro e fevereiro de 2022.
+
+source_url: "https://www.nasdaq.com/docs/index/nci-overview-q2-2026"
+schedule:
+  - effective_date: "2021-12-01"
+    quarter: "2021-Q4"
+    constituents: [BTC, ETH, LTC, LINK, UNI, XLM, BCH, FIL]
+  - effective_date: "2022-03-01"
+    quarter: "2022-Q1"
+    constituents: [BTC, ETH, LTC, LINK, UNI, XLM, BCH, FIL, AXS, SAND]
+  - effective_date: "2022-06-01"
+    quarter: "2022-Q2"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, BCH, FIL, AXS, SAND]
+  - effective_date: "2022-09-01"
+    quarter: "2022-Q3"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, BCH, FIL, AXS, SAND]
+  - effective_date: "2022-12-01"
+    quarter: "2022-Q4"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, BCH, ETC, FIL, AXS, SAND]
+  - effective_date: "2023-03-01"
+    quarter: "2023-Q1"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, BCH, ETC, AXS]
+  - effective_date: "2023-06-01"
+    quarter: "2023-Q2"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, BCH, ETC]
+  - effective_date: "2023-09-01"
+    quarter: "2023-Q3"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, ETC]
+  - effective_date: "2023-12-01"
+    quarter: "2023-Q4"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, ARB]
+  - effective_date: "2024-03-01"
+    quarter: "2024-Q1"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, XLM, ARB]
+  - effective_date: "2024-06-03"
+    quarter: "2024-Q2"
+    constituents: [BTC, ETH, LTC, LINK, DOT, UNI, SOL, XRP, ADA, AVAX, MATIC]
+  - effective_date: "2024-09-03"
+    quarter: "2024-Q3"
+    constituents: [BTC, ETH, LTC, LINK, UNI, SOL, XRP, ADA, AVAX, MATIC]
+  - effective_date: "2024-12-02"
+    quarter: "2024-Q4"
+    constituents: [BTC, ETH, LTC, LINK, UNI, SOL, XRP, ADA, AVAX]
+  - effective_date: "2025-03-03"
+    quarter: "2025-Q1"
+    constituents: [BTC, ETH, LTC, LINK, UNI, SOL, XRP, ADA, AVAX]
+  - effective_date: "2025-06-02"
+    quarter: "2025-Q2"
+    constituents: [BTC, ETH, LTC, LINK, UNI, XLM, SOL, XRP, ADA]
+  - effective_date: "2025-09-02"
+    quarter: "2025-Q3"
+    constituents: [BTC, ETH, LINK, UNI, XLM, SOL, XRP, ADA]
+  - effective_date: "2025-12-01"
+    quarter: "2025-Q4"
+    constituents: [BTC, ETH, LINK, XLM, SOL, XRP, ADA]

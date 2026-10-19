@@ -1,6 +1,4 @@
-"""
-Testes unitários para o módulo optimizer.py
-"""
+"""Testes da otimização de Markowitz por volatilidade-alvo."""
 
 import sys
 from pathlib import Path
@@ -8,110 +6,111 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from pypfopt import expected_returns, risk_models
 
-# Adiciona src/ ao path
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from optimizer import weighted_average_correlation, optimize_portfolio
+from optimizer import (
+    constituent_record_for_date,
+    estimate_inputs,
+    load_constituent_history,
+    optimize_portfolio,
+    run_rolling_optimization,
+)
 
 
-class TestWeightedAverageCorrelation:
-    """Testes para a função de correlação média ponderada."""
-
-    def test_perfect_correlation(self):
-        """Se todos os pares têm correlação 1, a média deve ser 1."""
-        corr = np.ones((3, 3))
-        weights = np.array([0.5, 0.3, 0.2])
-        assert weighted_average_correlation(weights, corr) == pytest.approx(1.0)
-
-    def test_zero_correlation_off_diagonal(self):
-        """Correlação zero fora da diagonal deve resultar em 0."""
-        corr = np.eye(3)
-        weights = np.array([0.5, 0.3, 0.2])
-        assert weighted_average_correlation(weights, corr) == pytest.approx(0.0)
-
-    def test_two_assets_equal_weights(self):
-        """Dois ativos com correlação ρ e pesos iguais: média = ρ."""
-        corr = np.array([[1.0, 0.6], [0.6, 1.0]])
-        weights = np.array([0.5, 0.5])
-        assert weighted_average_correlation(weights, corr) == pytest.approx(0.6)
-
-    def test_single_asset_returns_zero(self):
-        """Carteira com um único ativo não tem pares: correlação = 0."""
-        corr = np.ones((1, 1))
-        weights = np.array([1.0])
-        assert weighted_average_correlation(weights, corr) == pytest.approx(0.0)
-
-    def test_weights_sum_less_than_one(self):
-        """Pesos não normalizados não devem afetar a média ponderada."""
-        corr = np.array([[1.0, 0.5], [0.5, 1.0]])
-        weights = np.array([1.0, 1.0])  # não soma 1, mas a fração se cancela
-        assert weighted_average_correlation(weights, corr) == pytest.approx(0.5)
+@pytest.fixture
+def returns():
+    generator = np.random.default_rng(42)
+    dates = pd.date_range("2022-01-01", "2023-12-31", freq="D")
+    return pd.DataFrame(
+        generator.normal([0.0002, 0.0005, 0.0008], [0.015, 0.025, 0.04], (len(dates), 3)),
+        index=dates,
+        columns=["BTC", "ETH", "SOL"],
+    )
 
 
-class TestOptimizePortfolio:
-    """Testes para a função principal de otimização."""
+def test_estimate_inputs_matches_lib_defaults(returns):
+    mu, covariance, _ = estimate_inputs(returns)
 
-    @pytest.fixture
-    def returns(self):
-        """Retornos diários sintéticos para 3 ativos."""
-        np.random.seed(42)
-        dates = pd.date_range("2022-01-01", "2022-12-31", freq="B")
-        return pd.DataFrame(
-            np.random.normal(0.001, 0.02, (len(dates), 3)),
-            index=dates,
-            columns=["BTC", "ETH", "SOL"],
-        )
+    expected_mu = expected_returns.mean_historical_return(
+        returns,
+        returns_data=True,
+        frequency=365,
+    )
+    expected_covariance = risk_models.sample_cov(
+        returns,
+        returns_data=True,
+        frequency=365,
+    )
 
-    def test_weights_sum_to_one(self, returns):
-        """Os pesos otimizados devem somar 1."""
-        weights, info = optimize_portfolio(returns, max_avg_correlation=0.85)
-        assert weights.sum() == pytest.approx(1.0, abs=1e-6)
-
-    def test_weights_non_negative(self, returns):
-        """Não deve haver pesos negativos (short selling proibido)."""
-        weights, info = optimize_portfolio(returns, max_avg_correlation=0.85)
-        assert np.all(weights >= -1e-8)
-
-    def test_weights_within_bounds(self, returns):
-        """Todos os pesos devem respeitar os bounds [min, max]."""
-        weights, info = optimize_portfolio(
-            returns,
-            max_avg_correlation=0.85,
-            min_weight=0.0,
-            max_weight=0.40,
-        )
-        assert np.all(weights <= 0.40 + 1e-8)
-        assert np.all(weights >= 0.0 - 1e-8)
-
-    def test_info_has_expected_keys(self, returns):
-        """O dict de informações deve conter as métricas esperadas."""
-        weights, info = optimize_portfolio(returns, max_avg_correlation=0.85)
-        expected_keys = {
-            "success",
-            "message",
-            "expected_daily_return",
-            "expected_annual_return",
-            "daily_volatility",
-            "annual_volatility",
-            "sharpe_ratio",
-            "avg_correlation",
-            "num_assets_selected",
-        }
-        assert expected_keys.issubset(info.keys())
-
-    def test_sharpe_ratio_sensible(self, returns):
-        """Sharpe Ratio deve ser um número finito."""
-        weights, info = optimize_portfolio(returns, max_avg_correlation=0.85)
-        assert np.isfinite(info["sharpe_ratio"])
-
-    def test_conservative_may_fallback(self, returns):
-        """Perfil conservador pode fazer fallback se restrição for inviável."""
-        # Dados aleatórios provavelmente não violam 0.99, então otimiza normalmente
-        weights, info = optimize_portfolio(returns, max_avg_correlation=0.99)
-        assert weights.sum() == pytest.approx(1.0, abs=1e-6)
+    pd.testing.assert_series_equal(mu, expected_mu)
+    pd.testing.assert_frame_equal(covariance, expected_covariance)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+def test_covariance_is_psd_after_fix(returns):
+    _, covariance, info = estimate_inputs(returns)
+    assert info["covariance_psd"]
+    assert np.linalg.eigvalsh(covariance.values).min() >= -1e-10
+
+
+def test_weights_and_target_risk(returns):
+    weights, info = optimize_portfolio(returns, target_volatility=0.70)
+    assert weights.sum() == pytest.approx(1.0, abs=1e-7)
+    assert np.all(weights >= -1e-8)
+    assert info["target_feasible"]
+    assert info["annual_volatility"] <= 0.70 + 1e-5
+
+
+def test_infeasible_target_is_reported(returns):
+    weights, info = optimize_portfolio(returns, target_volatility=0.01)
+    assert weights.sum() == pytest.approx(1.0)
+    assert not info["target_feasible"]
+    assert info["annual_volatility"] == pytest.approx(info["minimum_volatility"], rel=1e-5)
+
+
+def test_more_risk_cannot_reduce_optimal_expected_return(returns):
+    _, lower_risk = optimize_portfolio(returns, target_volatility=0.45)
+    _, higher_risk = optimize_portfolio(returns, target_volatility=0.70)
+
+    assert lower_risk["target_feasible"]
+    assert higher_risk["target_feasible"]
+    assert (
+        higher_risk["expected_annual_return"]
+        >= lower_risk["expected_annual_return"] - 1e-7
+    )
+
+
+def test_rolling_weights_begin_on_monday_and_have_no_lookahead(returns):
+    profiles = {"teste": {"name": "Teste", "target_volatility": 0.9}}
+    history = pd.DataFrame(
+        {
+            "quarter": ["teste"],
+            "constituents": [tuple(returns.columns)],
+        },
+        index=pd.DatetimeIndex(["2021-01-01"], name="effective_date"),
+    )
+    weights, diagnostics = run_rolling_optimization(
+        returns, profiles=profiles, constituent_history=history
+    )
+    first_date = weights["teste"].index[0]
+    assert first_date == pd.Timestamp("2023-01-02")
+    assert (weights["teste"].index.weekday == 0).all()
+    assert weights["teste"].index.to_series().diff().dropna().eq(pd.Timedelta(days=7)).all()
+    assert diagnostics.iloc[0]["observations"] == 365
+    assert weights["teste"].index.equals(weights["benchmark"].index)
+
+
+def test_historical_constituents_are_point_in_time():
+    history = load_constituent_history()
+
+    before_june = constituent_record_for_date(history, pd.Timestamp("2024-06-01"))
+    after_june = constituent_record_for_date(history, pd.Timestamp("2024-07-01"))
+    after_december = constituent_record_for_date(history, pd.Timestamp("2025-01-01"))
+
+    assert "MATIC" not in before_june["constituents"]
+    assert "MATIC" in after_june["constituents"]
+    assert "MATIC" not in after_december["constituents"]
+    assert before_june["quarter"] == "2024-Q1"
+    assert after_june["quarter"] == "2024-Q2"

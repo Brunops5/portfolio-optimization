@@ -1,102 +1,36 @@
-
-# Ambientes virtuais
-
-venv/
-.env/
+# Ambiente local
 .venv/
-env/
-ENV/
+.env
 
-
-# Cache e bytecode Python
-
+# Python, testes e lint
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 .pytest_cache/
-.mypy_cache/
-.dmypy.json
-dmypy.json
 .ruff_cache/
+.coverage
+htmlcov/
 
+# Dados e artefatos gerados pelo pipeline
+data/raw/
+data/processed/
+results/
+reports/
 
-# Dados e resultados gerados 
+# Backups locais legados
+data.container-backup/
+results.container-backup/
+reports.container-backup/
 
-# Dados brutos e processados podem ser grandes e serem re-obtidos/re-gerados
-data/raw/*.csv
-data/processed/*.csv
-
-# Resultados numéricos gerados pelo pipeline
-results/metrics/*.csv
-results/weights/*.csv
-
-# Relatórios gerados automaticamente
-reports/figures/*.png
-reports/figures/*.jpg
-reports/figures/*.pdf
-reports/tables/*.csv
-reports/tables/*.md
-reports/tables/*.tex
-
-# Notebooks convertidos ou checkpoints
-*.nbconvert.ipynb
-
-
-# Configurações de IDEs e editores
-
+# Editores e sistema operacional
 .vscode/
 .idea/
 *.swp
-*.swo
 *~
 .DS_Store
 Thumbs.db
 
-
-# Git
-
-.git/
-
-
-# Jupyter Notebook checkpoints
-
-.ipynb_checkpoints/
-
-
-# Logs e arquivos temporários
-
+# Temporários
 *.log
 *.tmp
 *.bak
 *.orig
-
-
-# Sistema operacional
-
-.DS_Store
-.AppleDouble
-.LSOverride
-Thumbs.db
-Thumbs.db:encryptable
-ehthumbs.db
-ehthumbs_vista.db

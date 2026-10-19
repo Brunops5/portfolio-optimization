@@ -1,21 +1,26 @@
-"""
-Módulo de backtesting com janelas deslizantes mensais.
-Calcula evolução do patrimônio, métricas de desempenho e drawdowns.
-"""
+"""Backtest de carteiras buy-and-hold entre rebalanceamentos periódicos."""
 
-import yaml
+from typing import Dict, Optional, Tuple
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
+import yaml
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
-with open(CONFIG_PATH, "r") as f:
-    CONFIG = yaml.safe_load(f)
+with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+    CONFIG = yaml.safe_load(config_file)
 
-RESULTS_DIR = Path(CONFIG["paths"]["results"]) / "metrics"
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+def _validated_target_weights(row: pd.Series, columns: pd.Index) -> np.ndarray:
+    target = row.reindex(columns).fillna(0.0).to_numpy(dtype=float)
+    if not np.all(np.isfinite(target)) or (target < -1e-8).any():
+        raise ValueError("Pesos inválidos no rebalanceamento.")
+    target = np.maximum(target, 0.0)
+    if target.sum() <= 0:
+        raise ValueError("A carteira não possui pesos positivos.")
+    if not np.isclose(target.sum(), 1.0, atol=1e-6):
+        raise ValueError("Os pesos do rebalanceamento devem somar 1.")
+    return target / target.sum()
 
 
 def backtest_strategy(
@@ -24,110 +29,104 @@ def backtest_strategy(
     transaction_cost: float = 0.001,
     initial_capital: float = 10000.0,
 ) -> pd.DataFrame:
-    """
-    Simula a evolução de uma estratégia com rebalanceamento mensal.
+    """Simula retornos simples, drift dos pesos e custos cobrados uma única vez."""
+    if weights.empty:
+        raise ValueError("A tabela de pesos está vazia.")
+    if not 0 <= transaction_cost < 1:
+        raise ValueError("transaction_cost deve estar no intervalo [0, 1).")
 
-    Args:
-        daily_returns: Retornos logarítmicos diários de todos os ativos.
-        weights: DataFrame de pesos por data de rebalanceamento.
-        transaction_cost: Custo proporcional por rebalanceamento.
-        initial_capital: Patrimônio inicial.
+    returns = daily_returns.sort_index().loc[daily_returns.index >= weights.index[0]].copy()
+    if returns.empty:
+        raise ValueError("Não há retornos após o primeiro rebalanceamento.")
 
-    Returns:
-        DataFrame com colunas: ['portfolio_value', 'daily_return']
-        index: datas diárias do período de backtest.
-    """
-    rebalance_dates = weights.index
-    start_date = rebalance_dates[0]
-    end_date = daily_returns.index[-1]
+    target_by_date = weights.sort_index()
+    first_target = _validated_target_weights(target_by_date.iloc[0], returns.columns)
+    holdings = initial_capital * first_target
+    portfolio_value = float(initial_capital)
+    records = []
 
-    # Filtra retornos do período de backtest
-    mask = (daily_returns.index >= start_date) & (daily_returns.index <= end_date)
-    rets = daily_returns.loc[mask].copy()
+    for date, row in returns.iterrows():
+        value_before = portfolio_value
+        transaction_cost_value = 0.0
+        turnover = 0.0
+        asset_returns = row.to_numpy(dtype=float)
+        missing_returns = np.isnan(asset_returns)
+        held_before_rebalance = holdings > 1e-10
 
-    portfolio_value = initial_capital
-    values = []
-    daily_rets = []
-    current_weights = weights.iloc[0].values
+        if date in target_by_date.index and date != target_by_date.index[0]:
+            current_weights = holdings / holdings.sum()
+            target = _validated_target_weights(target_by_date.loc[date], returns.columns)
+            turnover = float(np.abs(target - current_weights).sum())
+            transaction_cost_value = portfolio_value * transaction_cost * turnover
+            portfolio_value -= transaction_cost_value
+            holdings = portfolio_value * target
 
-    for date, row in rets.iterrows():
-        # Verifica se é data de rebalanceamento
-        if date in weights.index:
-            new_weights = weights.loc[date].reindex(rets.columns).fillna(0).values
-            new_weights = np.maximum(new_weights, 0)
-            s = new_weights.sum()
-            if s > 0:
-                new_weights /= s
+        held_after_rebalance = holdings > 1e-10
+        # Verifica tanto a carteira trazida do dia anterior quanto a carteira-alvo.
+        # Assim, uma posição não pode ser liquidada ao último valor conhecido no
+        # rebalanceamento sem que o evento seja registrado.
+        missing_held = (held_before_rebalance | held_after_rebalance) & missing_returns
+        # Uma cotação ausente conserva o valor monetário da posição naquele dia.
+        # A ocorrência é registrada e pode reprovar o experimento no validador.
+        asset_returns = np.nan_to_num(asset_returns, nan=0.0)
+        if (asset_returns <= -1).any():
+            raise ValueError(f"Retorno simples menor ou igual a -100% em {date.date()}.")
 
-            # Custo de transação proporcional ao turnover
-            turnover = np.sum(np.abs(new_weights - current_weights))
-            cost = turnover * transaction_cost
-            portfolio_value *= (1 - cost)
-            current_weights = new_weights
+        holdings *= 1.0 + asset_returns
+        portfolio_value = float(holdings.sum())
+        net_return = portfolio_value / value_before - 1.0
+        records.append(
+            {
+                "portfolio_value": portfolio_value,
+                "daily_return": net_return,
+                "turnover": turnover,
+                "transaction_cost": transaction_cost_value,
+                "stale_positions": int(missing_held.sum()),
+            }
+        )
 
-        # Retorno do portfólio no dia
-        day_ret = np.dot(current_weights, row.fillna(0).values)
-        portfolio_value *= np.exp(day_ret)
-
-        values.append(portfolio_value)
-        daily_rets.append(day_ret)
-
-    result = pd.DataFrame(
-        {"portfolio_value": values, "daily_return": daily_rets},
-        index=rets.index,
-    )
-    return result
+    return pd.DataFrame(records, index=returns.index)
 
 
-def compute_drawdown_series(portfolio_value: pd.Series) -> pd.Series:
-    """Calcula a série de drawdown percentual."""
+def compute_drawdown_series(
+    portfolio_value: pd.Series, initial_capital: Optional[float] = None
+) -> pd.Series:
     rolling_max = portfolio_value.cummax()
-    drawdown = (portfolio_value - rolling_max) / rolling_max
-    return drawdown
+    if initial_capital is not None:
+        rolling_max = rolling_max.clip(lower=float(initial_capital))
+    return (portfolio_value - rolling_max) / rolling_max
 
 
-def maximum_drawdown(portfolio_value: pd.Series) -> float:
-    """Retorna o máximo drawdown (valor negativo)."""
-    return compute_drawdown_series(portfolio_value).min()
+def maximum_drawdown(
+    portfolio_value: pd.Series, initial_capital: Optional[float] = None
+) -> float:
+    return float(compute_drawdown_series(portfolio_value, initial_capital).min())
 
 
-def calculate_metrics(portfolio_value: pd.Series, daily_returns: pd.Series) -> Dict:
-    """
-    Calcula métricas de desempenho padrão.
+def calculate_metrics(
+    portfolio_value: pd.Series,
+    daily_returns: pd.Series,
+    initial_capital: Optional[float] = None,
+) -> Dict:
+    if portfolio_value.empty or daily_returns.empty:
+        raise ValueError("Séries vazias não permitem calcular métricas.")
+    if initial_capital is None:
+        initial_capital = float(portfolio_value.iloc[0] / (1 + daily_returns.iloc[0]))
 
-    Returns:
-        Dict com: total_return, annualized_return, annualized_volatility,
-                  sharpe_ratio, max_drawdown, calmar_ratio.
-    """
-    rf_annual = CONFIG["optimization"]["risk_free_rate_annual"]
-    n_years = len(daily_returns) / 365.0
-
-    total_return = portfolio_value.iloc[-1] / portfolio_value.iloc[0] - 1
-    # Retorno anualizado a partir de log-retornos diários (média geométrica).
-    # Consistente com a convenção de log-retornos adotada no projeto.
-    # Para criptoativos, o mercado opera todos os dias, portanto usa-se 365 dias.
-    annualized_return = np.exp(daily_returns.mean() * 365.0) - 1 if n_years > 0 else 0.0
-    annualized_volatility = daily_returns.std() * np.sqrt(365)
-
-    if annualized_volatility > 1e-12:
-        sharpe = (annualized_return - rf_annual) / annualized_volatility
+    total_return = float(portfolio_value.iloc[-1] / initial_capital - 1)
+    if isinstance(portfolio_value.index, pd.DatetimeIndex):
+        elapsed_days = (portfolio_value.index[-1] - portfolio_value.index[0]).days + 1
+        years = elapsed_days / 365.0
     else:
-        sharpe = 0.0
-
-    mdd = maximum_drawdown(portfolio_value)
-
-    if abs(mdd) > 1e-12:
-        calmar = annualized_return / abs(mdd)
-    else:
-        calmar = np.inf
-
+        years = len(daily_returns) / 365.0
+    annualized_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0.0
+    annualized_volatility = float(daily_returns.std(ddof=1) * np.sqrt(365))
+    max_drawdown = maximum_drawdown(portfolio_value, initial_capital)
     return {
-        "total_return": float(total_return),
+        "total_return": total_return,
         "annualized_return": float(annualized_return),
-        "annualized_volatility": float(annualized_volatility),
-        "sharpe_ratio": float(sharpe),
-        "max_drawdown": float(mdd),
-        "calmar_ratio": float(calmar),
+        "annualized_volatility": annualized_volatility,
+        "max_drawdown": max_drawdown,
     }
 
 
@@ -137,66 +136,51 @@ def run_full_backtest(
     transaction_cost: Optional[float] = None,
     initial_capital: Optional[float] = None,
 ) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
-    """
-    Executa backtest para todas as estratégias.
-
-    Returns:
-        (results_dict, metrics_df)
-    """
-    if transaction_cost is None:
-        transaction_cost = CONFIG["backtest"]["transaction_cost"]
-    if initial_capital is None:
-        initial_capital = CONFIG["backtest"]["initial_capital"]
-
+    transaction_cost = (
+        CONFIG["backtest"]["transaction_cost"]
+        if transaction_cost is None
+        else transaction_cost
+    )
+    initial_capital = (
+        CONFIG["backtest"]["initial_capital"] if initial_capital is None else initial_capital
+    )
     print("\n" + "=" * 60)
     print("FASE 3 — BACKTESTING")
     print("=" * 60)
-
     results = {}
-    metrics_rows = []
+    metric_rows = []
+    for name, strategy_weights in weights_dict.items():
+        result = backtest_strategy(
+            daily_returns, strategy_weights, transaction_cost, initial_capital
+        )
+        metrics = calculate_metrics(
+            result["portfolio_value"], result["daily_return"], initial_capital
+        )
+        elapsed_days = (result.index[-1] - result.index[0]).days + 1
+        elapsed_years = elapsed_days / 365.0
+        metrics["total_turnover"] = float(result["turnover"].sum())
+        metrics["annualized_turnover"] = (
+            metrics["total_turnover"] / elapsed_years if elapsed_years > 0 else 0.0
+        )
+        metrics["total_transaction_cost"] = float(result["transaction_cost"].sum())
+        metrics["rebalance_events"] = int((result["turnover"] > 1e-12).sum())
+        metrics["strategy"] = name
+        results[name] = result
+        metric_rows.append(metrics)
+        print(
+            f"{name}: retorno={metrics['total_return']:.2%}, "
+            f"vol={metrics['annualized_volatility']:.2%}, "
+            f"MDD={metrics['max_drawdown']:.2%}"
+        )
+    return results, pd.DataFrame(metric_rows).set_index("strategy")
 
-    for name, weights in weights_dict.items():
-        print(f"\n[BACKTEST] Estratégia: {name}")
-        try:
-            bt = backtest_strategy(daily_returns, weights, transaction_cost, initial_capital)
-            metrics = calculate_metrics(bt["portfolio_value"], bt["daily_return"])
-            metrics["strategy"] = name
-            metrics_rows.append(metrics)
-            results[name] = bt
 
-            print(f"  Retorno Total:      {metrics['total_return']*100:.2f}%")
-            print(f"  Retorno Anualizado: {metrics['annualized_return']*100:.2f}%")
-            print(f"  Volatilidade Anual: {metrics['annualized_volatility']*100:.2f}%")
-            print(f"  Sharpe Ratio:       {metrics['sharpe_ratio']:.3f}")
-            print(f"  Max Drawdown:       {metrics['max_drawdown']*100:.2f}%")
-        except Exception as e:
-            print(f"  [ERRO] {e}")
-
-    metrics_df = pd.DataFrame(metrics_rows)
-    metrics_df = metrics_df.set_index("strategy")
-    return results, metrics_df
-
-
-def save_backtest_results(results: Dict[str, pd.DataFrame], metrics_df: pd.DataFrame, outdir: Path) -> None:
-    """Persiste resultados do backtesting."""
+def save_backtest_results(
+    results: Dict[str, pd.DataFrame], metrics_df: pd.DataFrame, outdir: Path
+) -> None:
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-
-    for name, df in results.items():
-        path = outdir / f"backtest_{name}.csv"
-        df.to_csv(path)
-
-    metrics_path = outdir / "metrics_summary.csv"
-    metrics_df.to_csv(metrics_path)
-    print(f"\n[SALVO] Métricas em {metrics_path}")
-
-
-if __name__ == "__main__":
-    # Teste dummy
-    dates = pd.date_range("2023-01-01", "2023-12-31", freq="B")
-    rets = pd.DataFrame(np.random.normal(0.0005, 0.02, (len(dates), 3)), index=dates, columns=["A", "B", "C"])
-    w_dates = pd.date_range("2023-02-01", "2023-12-01", freq="MS")
-    weights = pd.DataFrame(np.full((len(w_dates), 3), 1/3), index=w_dates, columns=["A", "B", "C"])
-    bt = backtest_strategy(rets, weights)
-    print(bt.tail())
-    print(calculate_metrics(bt["portfolio_value"], bt["daily_return"]))
+    for name, dataframe in results.items():
+        dataframe.to_csv(outdir / f"backtest_{name}.csv")
+    metrics_df.to_csv(outdir / "metrics_summary.csv")
+    print(f"[SALVO] Métricas em {outdir / 'metrics_summary.csv'}")

@@ -14,6 +14,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from validators import (
     validate_weights,
+    validate_historical_constituents,
     validate_backtest_consistency,
     validate_metrics,
 )
@@ -43,11 +44,20 @@ class TestValidateWeights:
         errors, warnings = validate_weights({"teste": w})
         assert any("negativos" in e for e in errors)
 
-    def test_weight_above_max(self):
-        """Peso acima do limite de 40% deve gerar erro."""
-        w = pd.DataFrame({"A": [0.9], "B": [0.1]}, index=[pd.Timestamp("2023-01-31")])
+    def test_full_allocation_is_allowed_without_cap(self):
+        w = pd.DataFrame({"A": [1.0], "B": [0.0]}, index=[pd.Timestamp("2023-01-31")])
         errors, warnings = validate_weights({"teste": w})
-        assert any("40%" in e for e in errors)
+        assert not errors
+
+    def test_asset_outside_historical_composition_is_rejected(self):
+        weights = pd.DataFrame(
+            {"BTC": [0.5], "MATIC": [0.5]},
+            index=[pd.Timestamp("2025-01-01")],
+        )
+
+        errors, _ = validate_historical_constituents({"teste": weights})
+
+        assert any("MATIC" in error for error in errors)
 
 
 class TestValidateBacktest:
@@ -58,21 +68,39 @@ class TestValidateBacktest:
         n = len(values)
         dates = pd.date_range("2023-01-01", periods=n, freq="B")
         pv = pd.Series(values, index=dates)
-        daily_rets = np.log(pv / pv.shift(1)).fillna(0)
+        daily_rets = pv.pct_change(fill_method=None).fillna(0)
         bt = pd.DataFrame({"portfolio_value": pv, "daily_return": daily_rets}, index=dates)
         return bt
 
     def test_positive_portfolio_value(self):
         """Patrimônio positivo deve passar."""
         bt = self._make_backtest(np.linspace(10000, 11000, 10))
-        errors, warnings = validate_backtest_consistency({"teste": bt}, {"teste": pd.DataFrame()}, pd.DataFrame())
+        daily_returns = pd.DataFrame(index=bt.index)
+        errors, warnings = validate_backtest_consistency(
+            {"teste": bt}, {"teste": pd.DataFrame()}, daily_returns
+        )
         assert len(errors) == 0
 
     def test_negative_portfolio_value(self):
         """Patrimônio negativo deve gerar erro."""
         bt = self._make_backtest([10000, 5000, -100, 2000, 3000])
-        errors, warnings = validate_backtest_consistency({"teste": bt}, {"teste": pd.DataFrame()}, pd.DataFrame())
+        daily_returns = pd.DataFrame(index=bt.index)
+        errors, warnings = validate_backtest_consistency(
+            {"teste": bt}, {"teste": pd.DataFrame()}, daily_returns
+        )
         assert any("Patrimônio <= 0" in e for e in errors)
+
+    def test_stale_position_is_an_error(self):
+        bt = self._make_backtest([10000, 10000])
+        bt["stale_positions"] = [0, 1]
+        daily_returns = pd.DataFrame(index=bt.index)
+
+        errors, warnings = validate_backtest_consistency(
+            {"teste": bt}, {"teste": pd.DataFrame()}, daily_returns
+        )
+
+        assert any("sem nova cotação" in error for error in errors)
+        assert not warnings
 
 
 class TestValidateMetrics:
@@ -85,9 +113,7 @@ class TestValidateMetrics:
                 "total_return": [0.5],
                 "annualized_return": [0.2],
                 "annualized_volatility": [0.3],
-                "sharpe_ratio": [1.0],
                 "max_drawdown": [-0.2],
-                "calmar_ratio": [1.0],
             },
             index=["teste"],
         )
@@ -101,9 +127,7 @@ class TestValidateMetrics:
                 "total_return": [0.5],
                 "annualized_return": [0.2],
                 "annualized_volatility": [0.0],
-                "sharpe_ratio": [1.0],
                 "max_drawdown": [-0.2],
-                "calmar_ratio": [1.0],
             },
             index=["teste"],
         )
