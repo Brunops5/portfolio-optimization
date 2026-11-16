@@ -1,6 +1,4 @@
-"""
-Testes unitários para o módulo stats_tests.py
-"""
+"""Unit tests for periodic returns and Wilcoxon comparisons."""
 
 import sys
 from pathlib import Path
@@ -12,40 +10,14 @@ import pytest
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from stats_tests import (
-    periodic_returns_from_backtest,
-    wilcoxon_comparison,
-)
+from stats_tests import periodic_returns_from_backtest, wilcoxon_comparison
 
 
-class TestMonthlyReturnsFromBacktest:
-    """Testes para extração de retornos mensais logarítmicos."""
-
+class TestPeriodicReturnsFromBacktest:
     def test_log_returns_consistency(self):
-        """Retornos mensais devem ser logarítmicos, consistentes com o projeto."""
         dates = pd.date_range("2023-01-01", "2023-03-31", freq="B")
-        # Patrimônio dobra a cada mês
-        pv_values = np.exp(np.linspace(0, 1.5, len(dates)))
-        bt = pd.DataFrame(
-            {
-                "portfolio_value": pv_values,
-                "daily_return": pd.Series(pv_values, index=dates)
-                .pct_change(fill_method=None)
-                .fillna(0.0),
-            },
-            index=dates,
-        )
-        monthly = periodic_returns_from_backtest(bt, frequency="ME")
-
-        assert len(monthly) == 3
-        assert np.all(np.isfinite(monthly))
-
-    def test_matches_manual_calculation(self):
-        """Deve coincidir com cálculo manual de log-retorno."""
-        dates = pd.date_range("2023-01-01", "2023-04-30", freq="B")
-        # Valores fixos no último dia de cada mês
-        values = np.linspace(100, 200, len(dates))
-        bt = pd.DataFrame(
+        values = np.exp(np.linspace(0, 1.5, len(dates)))
+        backtest = pd.DataFrame(
             {
                 "portfolio_value": values,
                 "daily_return": pd.Series(values, index=dates)
@@ -54,19 +26,37 @@ class TestMonthlyReturnsFromBacktest:
             },
             index=dates,
         )
-        monthly = periodic_returns_from_backtest(bt, frequency="ME")
 
-        jan_end = bt["portfolio_value"].resample("ME").last().iloc[0]
-        feb_end = bt["portfolio_value"].resample("ME").last().iloc[1]
-        expected = np.log(feb_end / jan_end)
+        monthly = periodic_returns_from_backtest(backtest, frequency="ME")
 
+        assert len(monthly) == 3
+        assert np.all(np.isfinite(monthly))
+
+    def test_matches_manual_calculation(self):
+        dates = pd.date_range("2023-01-01", "2023-04-30", freq="B")
+        values = np.linspace(100, 200, len(dates))
+        backtest = pd.DataFrame(
+            {
+                "portfolio_value": values,
+                "daily_return": pd.Series(values, index=dates)
+                .pct_change(fill_method=None)
+                .fillna(0.0),
+            },
+            index=dates,
+        )
+
+        monthly = periodic_returns_from_backtest(backtest, frequency="ME")
+
+        january_end = backtest["portfolio_value"].resample("ME").last().iloc[0]
+        february_end = backtest["portfolio_value"].resample("ME").last().iloc[1]
+        expected = np.log(february_end / january_end)
         assert monthly.loc[pd.Timestamp("2023-02-28")] == pytest.approx(expected)
 
     def test_preserves_first_month(self):
         dates = pd.date_range("2023-01-01", "2023-02-28", freq="D")
-        daily = pd.Series(0.01, index=dates)
-        bt = pd.DataFrame({"daily_return": daily})
-        monthly = periodic_returns_from_backtest(bt, frequency="ME")
+        backtest = pd.DataFrame({"daily_return": 0.01}, index=dates)
+
+        monthly = periodic_returns_from_backtest(backtest, frequency="ME")
 
         assert list(monthly.index) == [
             pd.Timestamp("2023-01-31"),
@@ -76,8 +66,7 @@ class TestMonthlyReturnsFromBacktest:
 
     def test_weekly_non_overlapping_returns(self):
         dates = pd.date_range("2023-01-02", periods=14, freq="D")
-        daily = pd.Series(0.01, index=dates)
-        backtest = pd.DataFrame({"daily_return": daily})
+        backtest = pd.DataFrame({"daily_return": 0.01}, index=dates)
 
         weekly = periodic_returns_from_backtest(backtest, frequency="W-SUN")
 
@@ -97,44 +86,52 @@ class TestMonthlyReturnsFromBacktest:
 
 
 class TestWilcoxonComparison:
-    """Testes para comparação pareada de Wilcoxon."""
-
     def test_identical_series(self):
-        """Séries idênticas não apresentam diferença (p-value alto)."""
         dates = pd.date_range("2023-01", "2023-12", freq="ME")
-        r = pd.Series(np.random.normal(0.02, 0.05, len(dates)), index=dates)
-        stats = wilcoxon_comparison(r, r, label_a="A", label_b="B")
-        # Séries idênticas: não há meses vencedores
+        returns = pd.Series(
+            np.random.default_rng(42).normal(0.02, 0.05, len(dates)),
+            index=dates,
+        )
+
+        stats = wilcoxon_comparison(returns, returns, label_a="A", label_b="B")
+
         assert np.isnan(stats["win_rate_a"])
         assert np.isnan(stats["win_rate_b"])
-        # Diferença média deve ser zero
         assert stats["mean_diff"] == pytest.approx(0.0, abs=1e-12)
 
     def test_clearly_different_series(self):
-        """Séries claramente diferentes devem ter p-value baixo."""
         dates = pd.date_range("2023-01", "2023-12", freq="ME")
-        a = pd.Series([0.05] * len(dates), index=dates)
-        b = pd.Series([-0.05] * len(dates), index=dates)
-        stats = wilcoxon_comparison(a, b, label_a="A", label_b="B")
+        returns_a = pd.Series([0.05] * len(dates), index=dates)
+        returns_b = pd.Series([-0.05] * len(dates), index=dates)
+
+        stats = wilcoxon_comparison(returns_a, returns_b, label_a="A", label_b="B")
+
         assert stats["p_value"] < 0.01
         assert stats["win_rate_a"] == pytest.approx(1.0)
         assert stats["win_rate_b"] == pytest.approx(0.0)
 
     def test_insufficient_data(self):
-        """Poucos pontos devem retornar estatísticas NaN."""
         dates = pd.date_range("2023-01", "2023-03", freq="ME")
-        n = len(dates)
-        a = pd.Series([0.01, 0.02][:n], index=dates)
-        b = pd.Series([0.02, 0.01][:n], index=dates)
-        stats = wilcoxon_comparison(a, b, label_a="A", label_b="B")
+        returns_a = pd.Series([0.01, 0.02][: len(dates)], index=dates)
+        returns_b = pd.Series([0.02, 0.01][: len(dates)], index=dates)
+
+        stats = wilcoxon_comparison(returns_a, returns_b, label_a="A", label_b="B")
+
         assert np.isnan(stats["p_value"])
 
     def test_stats_keys(self):
-        """Resultado deve conter todos os campos esperados."""
         dates = pd.date_range("2023-01", "2023-12", freq="ME")
-        a = pd.Series(np.random.normal(0.02, 0.05, len(dates)), index=dates)
-        b = pd.Series(np.random.normal(0.01, 0.05, len(dates)), index=dates)
-        stats = wilcoxon_comparison(a, b)
+        generator = np.random.default_rng(42)
+        returns_a = pd.Series(
+            generator.normal(0.02, 0.05, len(dates)),
+            index=dates,
+        )
+        returns_b = pd.Series(
+            generator.normal(0.01, 0.05, len(dates)),
+            index=dates,
+        )
+
+        stats = wilcoxon_comparison(returns_a, returns_b)
 
         expected_keys = {
             "n",

@@ -1,11 +1,10 @@
-# Composição histórica do Nasdaq Crypto Index (NCI).
-# Fonte: gráfico "NCI Number of Constituents per Quarter since Launch",
-# Nasdaq CME Crypto Index Overview, consultado em 19-09-2026.
+# Historical composition of the Nasdaq Crypto Index (NCI).
+# Source: "NCI Number of Constituents per Quarter since Launch",
+# Nasdaq CME Crypto Index Overview, accessed on 2026-09-19.
 # https://www.nasdaq.com/docs/index/nci-overview-q2-2026
 #
-# A data efetiva é o primeiro dia útil de março, junho, setembro ou dezembro,
-# conforme a metodologia. A entrada de 12-2021 é necessária para determinar o
-# universo vigente em janeiro e fevereiro de 2022.
+# The effective date is the first business day of March, June, September, or
+# December. The December 2021 entry defines the universe in early 2022.
 
 source_url: "https://www.nasdaq.com/docs/index/nci-overview-q2-2026"
 schedule:

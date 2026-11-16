@@ -1,16 +1,15 @@
-# Configuração do projeto de otimização de portfólios de criptoativos
+# PortPerfilCrypto experiment configuration
 
-# Período de análise (formato YYYY-MM-DD)
+# Analysis period in YYYY-MM-DD format.
 start_date: "2022-01-01"
 end_date: "2025-12-31"
 
-# Janela de estimação em meses (rolling window)
+# Rolling estimation window and Monday-to-Sunday rebalance periods.
 estimation_window_months: 12
-rebalance_frequency: "W-MON"  # Semanas de segunda a domingo
+rebalance_frequency: "W-MON"
 
-# União dos constituintes históricos do NCI entre 2022 e 2025. A composição
-# vigente em cada data vem de paths.constituent_history; esta lista define apenas
-# quais séries de preços precisam ser coletadas.
+# Union of historical NCI constituents from 2022 to 2025. This list controls
+# data collection only; paths.constituent_history controls daily eligibility.
 assets:
   - BTC
   - ETH
@@ -31,48 +30,39 @@ assets:
   - AVAX
   - MATIC
 
-# Cenários experimentais: volatilidade anual máxima estimada.
-# Três pontos ao longo da região factível das janelas rolling: o menor alvo
-# factível em todas as janelas (65%), um ponto intermediário (85%) e o extremo
-# superior do desenho (105%). As chaves são neutras para não associar os cortes
-# a perfis de investidor sem uma escala externa de suitability.
+# Experimental annualized volatility ceilings. Profile names are relative to
+# this study, not universal investor suitability categories.
 profiles:
-  risco_065:
+  risk_065:
     target_volatility: 0.65
-    name: "Risco 65%"
-  risco_085:
+    name: "Conservative (65%)"
+  risk_085:
     target_volatility: 0.85
-    name: "Risco 85%"
-  risco_105:
+    name: "Moderate (85%)"
+  risk_105:
     target_volatility: 1.05
-    name: "Risco 105%"
+    name: "Aggressive (105%)"
 
-# Parâmetros de otimização
 optimization:
-  min_weight: 0.0               # Long-only (sem short selling)
-  max_weight: 1.0               # Sem teto adicional de concentração
-  min_observations: 300         # Mínimo absoluto na janela de estimação
-  max_data_gap_days: 7          # Cotação mais recente permitida
-  max_internal_gap_days: 7      # Limite para forward fill de lacunas internas
+  min_weight: 0.0            # Long-only portfolios.
+  max_weight: 1.0            # No additional concentration cap.
+  min_observations: 300      # Required observations in each estimation window.
+  max_data_gap_days: 7       # Maximum age of the most recent observation.
+  max_internal_gap_days: 7   # Maximum forward-filled internal gap.
 
-# Parâmetros de backtesting
 backtest:
   initial_capital: 10000.0
-  transaction_cost: 0.001  # 0.1% por rebalanceamento
-  # Posições sem cotação tornam a validação final reprovada. A série deve
-  # ser corrigida (por exemplo, conversão de token ou liquidação documentada).
+  transaction_cost: 0.001    # 0.1% times turnover.
+  # Missing prices require a documented correction before final publication.
   stale_positions_are_errors: true
 
-# Comparações pareadas em semanas não sobrepostas. A agregação mensal é mantida
-# como análise de robustez, pois retornos semanais podem apresentar dependência
-# temporal mesmo quando não há sobreposição.
+# Weekly comparisons are primary; monthly comparisons test robustness.
 statistics:
   primary_return_frequency: "W-SUN"
   robustness_return_frequency: "ME"
 
-# Caminhos
 paths:
-  # PORTFOLIO_CACHE_DIR pode sobrescrever o cache padrão na home.
+  # PORTFOLIO_CACHE_DIR overrides this location.
   cache_dir: "~/.cache/portfolio-optimization"
   processed_data: "data/processed"
   constituent_history: "nci_constituents.yaml"

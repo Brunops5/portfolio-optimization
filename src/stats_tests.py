@@ -1,35 +1,40 @@
-"""
-Módulo de análise estatística comparativa.
-Teste de Wilcoxon de postos sinalizados e estatísticas descritivas.
-"""
+"""Compare strategy returns with paired Wilcoxon signed-rank tests."""
+
+from pathlib import Path
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
-from pathlib import Path
-from typing import Dict
+
+import names
 
 
 def periodic_returns_from_backtest(
-    backtest_df: pd.DataFrame, frequency: str
+    backtest_df: pd.DataFrame,
+    frequency: str,
 ) -> pd.Series:
-    """
-    Extrai log-retornos periódicos a partir dos retornos simples diários.
+    """Compound daily returns into non-overlapping periodic log returns.
 
-    Os retornos são compostos em períodos não sobrepostos e convertidos para
-    log-retorno apenas para a comparação estatística.
+    Simple returns are compounded first and converted to log returns second.
+    Partial weeks are excluded because cryptocurrency markets trade seven days
+    a week, making incomplete weeks unsuitable for paired comparison.
     """
-    if "daily_return" not in backtest_df:
-        raise ValueError("O backtest deve conter a coluna daily_return.")
-    daily_returns = backtest_df["daily_return"]
-    if daily_returns.empty or (daily_returns <= -1).any():
-        raise ValueError("Retornos diários inválidos para agregação periódica.")
+    if names.DAILY_RETURN not in backtest_df:
+        raise ValueError("The backtest must contain a daily_return column.")
+
+    daily_returns = backtest_df[names.DAILY_RETURN]
+    if daily_returns.empty:
+        raise ValueError("Daily returns cannot be empty.")
+    if (daily_returns <= -1).any():
+        raise ValueError("Daily returns must be greater than -100%.")
+
     resampler = daily_returns.resample(frequency)
     periodic_simple = (1.0 + daily_returns).resample(frequency).prod() - 1.0
     if frequency.upper().startswith("W-"):
-        # O mercado cripto opera sete dias. Semanas parciais nos limites da
-        # amostra não são comparáveis às demais e ficam fora do teste.
-        periodic_simple = periodic_simple.loc[resampler.count() == 7]
+        complete_weeks = resampler.count() == 7
+        periodic_simple = periodic_simple.loc[complete_weeks]
+
     return np.log1p(periodic_simple).dropna()
 
 
@@ -39,123 +44,149 @@ def wilcoxon_comparison(
     label_a: str = "A",
     label_b: str = "B",
 ) -> Dict:
+    """Compare two aligned return series and summarize their differences.
+
+    The test uses paired periods. Fewer than six pairs, or an invalid Wilcoxon
+    calculation, produces missing test statistics rather than a false result.
     """
-    Aplica o teste de Wilcoxon pareado entre duas séries de retornos mensais.
+    paired = pd.concat([returns_a, returns_b], axis=1).dropna()
+    paired.columns = [label_a, label_b]
 
-    Args:
-        returns_a, returns_b: Séries de retornos mensais (mesmo índice temporal).
-
-    Returns:
-        Dict com estatísticas do teste e diferenças.
-    """
-    # Alinha e remove NaN
-    df = pd.concat([returns_a, returns_b], axis=1).dropna()
-    df.columns = [label_a, label_b]
-
-    if len(df) < 6:
+    if len(paired) < 6:
         return {
-            "n": len(df),
-            "wilcoxon_statistic": np.nan,
-            "p_value": np.nan,
-            "median_diff": np.nan,
-            "mean_diff": np.nan,
-            "std_diff": np.nan,
-            "min_diff": np.nan,
-            "max_diff": np.nan,
-            "win_rate_a": np.nan,
-            "win_rate_b": np.nan,
+            names.N: len(paired),
+            names.WILCOXON_STATISTIC: np.nan,
+            names.P_VALUE: np.nan,
+            names.MEDIAN_DIFF: np.nan,
+            names.MEAN_DIFF: np.nan,
+            names.STD_DIFF: np.nan,
+            names.MIN_DIFF: np.nan,
+            names.MAX_DIFF: np.nan,
+            names.WIN_RATE_A: np.nan,
+            names.WIN_RATE_B: np.nan,
         }
 
-    diffs = df[label_a] - df[label_b]
-
-    # Wilcoxon
-    if np.allclose(diffs, 0):
-        stat, pvalue = 0.0, 1.0
+    differences = paired[label_a] - paired[label_b]
+    if np.allclose(differences, 0):
+        statistic = 0.0
+        p_value = 1.0
     else:
         try:
-            stat, pvalue = wilcoxon(diffs, zero_method="wilcox", correction=False)
+            statistic, p_value = wilcoxon(
+                differences,
+                zero_method="wilcox",
+                correction=False,
+            )
         except ValueError:
-            stat, pvalue = np.nan, np.nan
+            statistic = np.nan
+            p_value = np.nan
 
-    win_a = (diffs > 0).sum()
-    win_b = (diffs < 0).sum()
-    total = win_a + win_b
+    wins_a = (differences > 0).sum()
+    wins_b = (differences < 0).sum()
+    decisive_periods = wins_a + wins_b
+    if decisive_periods > 0:
+        win_rate_a = wins_a / decisive_periods
+        win_rate_b = wins_b / decisive_periods
+    else:
+        win_rate_a = np.nan
+        win_rate_b = np.nan
 
     return {
-        "n": len(df),
-        "wilcoxon_statistic": float(stat),
-        "p_value": float(pvalue),
-        "median_diff": float(diffs.median()),
-        "mean_diff": float(diffs.mean()),
-        "std_diff": float(diffs.std()),
-        "min_diff": float(diffs.min()),
-        "max_diff": float(diffs.max()),
-        "win_rate_a": float(win_a / total) if total > 0 else np.nan,
-        "win_rate_b": float(win_b / total) if total > 0 else np.nan,
+        names.N: len(paired),
+        names.WILCOXON_STATISTIC: float(statistic),
+        names.P_VALUE: float(p_value),
+        names.MEDIAN_DIFF: float(differences.median()),
+        names.MEAN_DIFF: float(differences.mean()),
+        names.STD_DIFF: float(differences.std()),
+        names.MIN_DIFF: float(differences.min()),
+        names.MAX_DIFF: float(differences.max()),
+        names.WIN_RATE_A: float(win_rate_a),
+        names.WIN_RATE_B: float(win_rate_b),
     }
+
+
+def _holm_adjustment(p_values: pd.Series) -> pd.Series:
+    """Adjust p-values for multiple comparisons using Holm's method."""
+    valid = p_values.dropna().sort_values()
+    adjusted = pd.Series(np.nan, index=p_values.index, dtype=float)
+    running_max = 0.0
+    number_of_tests = len(valid)
+
+    for rank, (index, p_value) in enumerate(valid.items()):
+        multiplier = number_of_tests - rank
+        adjusted_value = min(1.0, multiplier * p_value)
+        running_max = max(running_max, adjusted_value)
+        adjusted.loc[index] = running_max
+
+    return adjusted
 
 
 def compare_all_strategies(
     backtest_results: Dict[str, pd.DataFrame],
     frequency: str = "ME",
 ) -> pd.DataFrame:
-    """
-    Executa comparações pareadas Wilcoxon entre todas as estratégias.
-
-    Returns:
-        DataFrame com resultados do teste para cada par.
-    """
+    """Run a paired Wilcoxon comparison for every pair of strategies."""
     print("\n" + "=" * 60)
-    print(f"FASE 4 — TESTE DE WILCOXON ({frequency})")
+    print(f"STEP 4 — WILCOXON TEST ({frequency})")
     print("=" * 60)
 
     periodic = {
-        name: periodic_returns_from_backtest(df, frequency)
-        for name, df in backtest_results.items()
+        name: periodic_returns_from_backtest(dataframe, frequency)
+        for name, dataframe in backtest_results.items()
     }
-    names = list(periodic.keys())
-
+    strategy_names = list(periodic)
     rows = []
-    for i in range(len(names)):
-        for j in range(i + 1, len(names)):
-            a, b = names[i], names[j]
-            stats = wilcoxon_comparison(periodic[a], periodic[b], label_a=a, label_b=b)
-            stats["strategy_a"] = a
-            stats["strategy_b"] = b
-            stats["return_frequency"] = frequency
+
+    for first_index in range(len(strategy_names)):
+        for second_index in range(first_index + 1, len(strategy_names)):
+            strategy_a = strategy_names[first_index]
+            strategy_b = strategy_names[second_index]
+            stats = wilcoxon_comparison(
+                periodic[strategy_a],
+                periodic[strategy_b],
+                label_a=strategy_a,
+                label_b=strategy_b,
+            )
+            stats[names.STRATEGY_A] = strategy_a
+            stats[names.STRATEGY_B] = strategy_b
+            stats[names.RETURN_FREQUENCY] = frequency
             rows.append(stats)
 
-            print(f"\n{a} vs {b}:")
+            print(f"\n{strategy_a} vs {strategy_b}:")
             print(
-                f"  n={stats['n']}, W={stats['wilcoxon_statistic']:.2f}, "
-                f"p={stats['p_value']:.4f}"
+                f"  n={stats[names.N]}, "
+                f"W={stats[names.WILCOXON_STATISTIC]:.2f}, "
+                f"p={stats[names.P_VALUE]:.4f}"
             )
             print(
-                f"  Diferença média: {stats['mean_diff'] * 100:.2f}%, "
-                f"mediana: {stats['median_diff'] * 100:.2f}%"
+                f"  Mean difference: {stats[names.MEAN_DIFF] * 100:.2f}%, "
+                f"median: {stats[names.MEDIAN_DIFF] * 100:.2f}%"
             )
             print(
-                f"  Win rate {a}: {stats['win_rate_a'] * 100:.1f}% | "
-                f"{b}: {stats['win_rate_b'] * 100:.1f}%"
+                f"  Win rate {strategy_a}: "
+                f"{stats[names.WIN_RATE_A] * 100:.1f}% | "
+                f"{strategy_b}: {stats[names.WIN_RATE_B] * 100:.1f}%"
             )
 
-    df = pd.DataFrame(rows)
-    # Correção de Holm para controlar o erro familiar nas comparações múltiplas.
-    valid = df["p_value"].dropna().sort_values()
-    adjusted = pd.Series(np.nan, index=df.index, dtype=float)
-    running_max = 0.0
-    number_of_tests = len(valid)
-    for rank, (index, p_value) in enumerate(valid.items()):
-        running_max = max(running_max, min(1.0, (number_of_tests - rank) * p_value))
-        adjusted.loc[index] = running_max
-    df["p_value_holm"] = adjusted
-    df = df[[
-        "strategy_a", "strategy_b", "return_frequency", "n",
-        "wilcoxon_statistic", "p_value", "p_value_holm",
-        "mean_diff", "median_diff", "std_diff", "min_diff", "max_diff",
-        "win_rate_a", "win_rate_b",
-    ]]
-    return df
+    results = pd.DataFrame(rows)
+    results[names.P_VALUE_HOLM] = _holm_adjustment(results[names.P_VALUE])
+    columns = [
+        names.STRATEGY_A,
+        names.STRATEGY_B,
+        names.RETURN_FREQUENCY,
+        names.N,
+        names.WILCOXON_STATISTIC,
+        names.P_VALUE,
+        names.P_VALUE_HOLM,
+        names.MEAN_DIFF,
+        names.MEDIAN_DIFF,
+        names.STD_DIFF,
+        names.MIN_DIFF,
+        names.MAX_DIFF,
+        names.WIN_RATE_A,
+        names.WIN_RATE_B,
+    ]
+    return results[columns]
 
 
 def save_wilcoxon_results(
@@ -163,17 +194,16 @@ def save_wilcoxon_results(
     outdir: Path,
     stem: str = "wilcoxon_results",
 ) -> None:
-    """Salva resultados em CSV e Markdown."""
+    """Save statistical comparisons as CSV and Markdown tables."""
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     csv_path = outdir / f"{stem}.csv"
     df.to_csv(csv_path, index=False)
-    print(f"\n[SALVO] {csv_path}")
+    print(f"\n[SAVED] {csv_path}")
 
-    # Gera tabela Markdown
-    md_path = outdir / f"{stem}.md"
-    with open(md_path, "w") as f:
-        f.write("# Resultados do Teste de Wilcoxon\n\n")
-        f.write(df.to_markdown(index=False, floatfmt=".4f"))
-    print(f"[SALVO] {md_path}")
+    markdown_path = outdir / f"{stem}.md"
+    with markdown_path.open("w", encoding="utf-8") as file:
+        file.write("# Wilcoxon Signed-Rank Test Results\n\n")
+        file.write(df.to_markdown(index=False, floatfmt=".4f"))
+    print(f"[SAVED] {markdown_path}")
