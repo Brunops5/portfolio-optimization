@@ -1,4 +1,4 @@
-"""Simulate portfolios that buy and hold between scheduled rebalances."""
+'''Simulate portfolios that buy and hold between scheduled rebalances.'''
 
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -10,7 +10,7 @@ import yaml
 import names
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / names.CONFIG_FILENAME
-with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+with CONFIG_PATH.open('r', encoding='utf-8') as config_file:
     CONFIG = yaml.safe_load(config_file)
 
 
@@ -18,23 +18,23 @@ def _validated_target_weights(
     row: pd.Series,
     columns: pd.Index,
 ) -> np.ndarray:
-    """Return target weights aligned with the return columns.
+    '''Return target weights aligned with the return columns.
 
     Missing assets receive zero weight. Invalid weights are rejected instead of
     being silently repaired, because that would change the experiment.
-    """
+    '''
     target = row.reindex(columns).fillna(0.0).to_numpy(dtype=float)
 
     if not np.all(np.isfinite(target)):
-        raise ValueError("Rebalance weights must be finite.")
+        raise ValueError('Rebalance weights must be finite.')
     if (target < -1e-8).any():
-        raise ValueError("Rebalance weights cannot be negative.")
+        raise ValueError('Rebalance weights cannot be negative.')
 
     target = np.maximum(target, 0.0)
     if target.sum() <= 0:
-        raise ValueError("The portfolio must contain at least one positive weight.")
+        raise ValueError('The portfolio must contain at least one positive weight.')
     if not np.isclose(target.sum(), 1.0, atol=1e-6):
-        raise ValueError("Rebalance weights must sum to 1.")
+        raise ValueError('Rebalance weights must sum to 1.')
 
     return target / target.sum()
 
@@ -45,25 +45,25 @@ def backtest_strategy(
     transaction_cost: float = 0.001,
     initial_capital: float = 10000.0,
 ) -> pd.DataFrame:
-    """Simulate daily holdings, weekly rebalances, and transaction costs.
+    '''Simulate daily holdings, weekly rebalances, and transaction costs.
 
     Each day follows three steps:
     1. Rebalance when the date has a new target weight vector.
     2. Deduct cost once, using turnover times the transaction cost rate.
-    3. Apply each asset's simple return to its monetary holding.
+    3. Apply the simple return of each asset to its monetary holding.
 
     Asset weights therefore drift between rebalances. A missing return keeps the
     last monetary value of that holding and is reported in ``stale_positions``.
-    """
+    '''
     if weights.empty:
-        raise ValueError("The weight table is empty.")
+        raise ValueError('The weight table is empty.')
     if not 0 <= transaction_cost < 1:
-        raise ValueError("transaction_cost must be in the interval [0, 1).")
+        raise ValueError('transaction_cost must be in the interval [0, 1).')
 
     returns = daily_returns.sort_index()
     returns = returns.loc[returns.index >= weights.index[0]].copy()
     if returns.empty:
-        raise ValueError("There are no returns after the first rebalance.")
+        raise ValueError('There are no returns after the first rebalance.')
 
     target_by_date = weights.sort_index()
     first_target = _validated_target_weights(
@@ -103,7 +103,7 @@ def backtest_strategy(
         asset_returns = np.nan_to_num(asset_returns, nan=0.0)
         if (asset_returns <= -1).any():
             raise ValueError(
-                f"Simple return less than or equal to -100% on {date.date()}."
+                f'Simple return less than or equal to -100% on {date.date()}.'
             )
 
         holdings *= 1.0 + asset_returns
@@ -126,7 +126,7 @@ def compute_drawdown_series(
     portfolio_value: pd.Series,
     initial_capital: Optional[float] = None,
 ) -> pd.Series:
-    """Calculate the percentage distance from each historical value peak."""
+    '''Calculate the percentage distance from each historical value peak.'''
     rolling_max = portfolio_value.cummax()
     if initial_capital is not None:
         rolling_max = rolling_max.clip(lower=float(initial_capital))
@@ -137,7 +137,7 @@ def maximum_drawdown(
     portfolio_value: pd.Series,
     initial_capital: Optional[float] = None,
 ) -> float:
-    """Return the largest peak-to-trough loss in the series."""
+    '''Return the largest peak-to-trough loss in the series.'''
     drawdown = compute_drawdown_series(portfolio_value, initial_capital)
     return float(drawdown.min())
 
@@ -147,9 +147,9 @@ def calculate_metrics(
     daily_returns: pd.Series,
     initial_capital: Optional[float] = None,
 ) -> Dict:
-    """Calculate total return, annualized return, volatility, and drawdown."""
+    '''Calculate total return, annualized return, volatility, and drawdown.'''
     if portfolio_value.empty or daily_returns.empty:
-        raise ValueError("Metrics cannot be calculated from empty series.")
+        raise ValueError('Metrics cannot be calculated from empty series.')
     if initial_capital is None:
         first_return = daily_returns.iloc[0]
         initial_capital = float(portfolio_value.iloc[0] / (1 + first_return))
@@ -184,15 +184,15 @@ def run_full_backtest(
     transaction_cost: Optional[float] = None,
     initial_capital: Optional[float] = None,
 ) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
-    """Backtest every strategy and collect comparable performance metrics."""
+    '''Backtest every strategy and collect comparable performance metrics.'''
     if transaction_cost is None:
         transaction_cost = CONFIG[names.BACKTEST][names.TRANSACTION_COST]
     if initial_capital is None:
         initial_capital = CONFIG[names.BACKTEST][names.INITIAL_CAPITAL]
 
-    print("\n" + "=" * 60)
-    print("STEP 3 — BACKTESTING")
-    print("=" * 60)
+    print('\n' + '=' * 60)
+    print('STEP 3 — BACKTESTING')
+    print('=' * 60)
 
     results = {}
     metric_rows = []
@@ -228,9 +228,9 @@ def run_full_backtest(
         metric_rows.append(metrics)
 
         print(
-            f"{name}: return={metrics[names.TOTAL_RETURN]:.2%}, "
-            f"volatility={metrics[names.ANNUALIZED_VOLATILITY]:.2%}, "
-            f"max drawdown={metrics[names.MAX_DRAWDOWN]:.2%}"
+            f'{name}: return={metrics[names.TOTAL_RETURN]:.2%}, '
+            f'volatility={metrics[names.ANNUALIZED_VOLATILITY]:.2%}, '
+            f'max drawdown={metrics[names.MAX_DRAWDOWN]:.2%}'
         )
 
     return results, pd.DataFrame(metric_rows).set_index(names.STRATEGY)
@@ -241,13 +241,13 @@ def save_backtest_results(
     metrics_df: pd.DataFrame,
     outdir: Path,
 ) -> None:
-    """Save one daily backtest per strategy and a shared metrics table."""
+    '''Save one daily backtest per strategy and a shared metrics table.'''
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     for name, dataframe in results.items():
-        dataframe.to_csv(outdir / f"backtest_{name}.csv")
+        dataframe.to_csv(outdir / f'backtest_{name}.csv')
 
     metrics_path = outdir / names.METRICS_SUMMARY_FILENAME
     metrics_df.to_csv(metrics_path)
-    print(f"[SAVED] Metrics: {metrics_path}")
+    print(f'[SAVED] Metrics: {metrics_path}')

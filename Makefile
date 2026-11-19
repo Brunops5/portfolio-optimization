@@ -1,8 +1,9 @@
 PYTHON ?= python3
 VENV ?= .venv
-PIP := $(VENV)/bin/pip
-PYTEST := $(VENV)/bin/pytest
-RUFF := $(VENV)/bin/ruff
+PY := $(VENV)/bin/python
+PIP := $(PY) -m pip
+PYTEST := $(PY) -m pytest
+RUFF := $(PY) -m ruff
 
 .PHONY: install run test lint format check clean
 
@@ -11,16 +12,17 @@ install:
 	$(PIP) install -r requirements.txt
 
 run:
-	$(VENV)/bin/python main.py
+	$(PY) main.py
 
 test:
 	$(PYTEST) -q
 
 lint:
-	$(RUFF) check --select E4,E7,E9,F --ignore E402 main.py src tests
+	$(RUFF) check --select E4,E7,E9,F,Q --ignore E402 main.py src tests
 
 format:
 	$(RUFF) format main.py src tests
+	$(RUFF) check --select Q --fix main.py src tests
 
 check: lint test
 

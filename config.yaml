@@ -1,12 +1,12 @@
 # PortPerfilCrypto experiment configuration
 
 # Analysis period in YYYY-MM-DD format.
-start_date: "2022-01-01"
-end_date: "2025-12-31"
+start_date: '2022-01-01'
+end_date: '2025-12-31'
 
 # Rolling estimation window and Monday-to-Sunday rebalance periods.
 estimation_window_months: 12
-rebalance_frequency: "W-MON"
+rebalance_frequency: 'W-MON'
 
 # Union of historical NCI constituents from 2022 to 2025. This list controls
 # data collection only; paths.constituent_history controls daily eligibility.
@@ -35,13 +35,13 @@ assets:
 profiles:
   risk_065:
     target_volatility: 0.65
-    name: "Conservative (65%)"
+    name: 'Conservative (65%)'
   risk_085:
     target_volatility: 0.85
-    name: "Moderate (85%)"
+    name: 'Moderate (85%)'
   risk_105:
     target_volatility: 1.05
-    name: "Aggressive (105%)"
+    name: 'Aggressive (105%)'
 
 optimization:
   min_weight: 0.0            # Long-only portfolios.
@@ -58,13 +58,13 @@ backtest:
 
 # Weekly comparisons are primary; monthly comparisons test robustness.
 statistics:
-  primary_return_frequency: "W-SUN"
-  robustness_return_frequency: "ME"
+  primary_return_frequency: 'W-SUN'
+  robustness_return_frequency: 'ME'
 
 paths:
-  # PORTFOLIO_CACHE_DIR overrides this location.
-  cache_dir: "~/.cache/portfolio-optimization"
-  processed_data: "data/processed"
-  constituent_history: "nci_constituents.yaml"
-  results: "results"
-  reports: "reports"
+  # PORTPERFILCRYPTO_CACHE_DIR overrides this location.
+  cache_dir: '~/.cache/portperfilcrypto'
+  processed_data: '~/PortPerfilCrypto/data/processed'
+  constituent_history: 'nci_constituents.yaml'
+  results: '~/PortPerfilCrypto/results'
+  reports: '~/PortPerfilCrypto/reports'

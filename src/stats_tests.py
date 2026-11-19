@@ -1,4 +1,4 @@
-"""Compare strategy returns with paired Wilcoxon signed-rank tests."""
+'''Compare strategy returns with paired Wilcoxon signed-rank tests.'''
 
 from pathlib import Path
 from typing import Dict
@@ -14,24 +14,24 @@ def periodic_returns_from_backtest(
     backtest_df: pd.DataFrame,
     frequency: str,
 ) -> pd.Series:
-    """Compound daily returns into non-overlapping periodic log returns.
+    '''Compound daily returns into non-overlapping periodic log returns.
 
     Simple returns are compounded first and converted to log returns second.
     Partial weeks are excluded because cryptocurrency markets trade seven days
     a week, making incomplete weeks unsuitable for paired comparison.
-    """
+    '''
     if names.DAILY_RETURN not in backtest_df:
-        raise ValueError("The backtest must contain a daily_return column.")
+        raise ValueError('The backtest must contain a daily_return column.')
 
     daily_returns = backtest_df[names.DAILY_RETURN]
     if daily_returns.empty:
-        raise ValueError("Daily returns cannot be empty.")
+        raise ValueError('Daily returns cannot be empty.')
     if (daily_returns <= -1).any():
-        raise ValueError("Daily returns must be greater than -100%.")
+        raise ValueError('Daily returns must be greater than -100%.')
 
     resampler = daily_returns.resample(frequency)
     periodic_simple = (1.0 + daily_returns).resample(frequency).prod() - 1.0
-    if frequency.upper().startswith("W-"):
+    if frequency.upper().startswith('W-'):
         complete_weeks = resampler.count() == 7
         periodic_simple = periodic_simple.loc[complete_weeks]
 
@@ -41,14 +41,14 @@ def periodic_returns_from_backtest(
 def wilcoxon_comparison(
     returns_a: pd.Series,
     returns_b: pd.Series,
-    label_a: str = "A",
-    label_b: str = "B",
+    label_a: str = 'A',
+    label_b: str = 'B',
 ) -> Dict:
-    """Compare two aligned return series and summarize their differences.
+    '''Compare two aligned return series and summarize their differences.
 
     The test uses paired periods. Fewer than six pairs, or an invalid Wilcoxon
     calculation, produces missing test statistics rather than a false result.
-    """
+    '''
     paired = pd.concat([returns_a, returns_b], axis=1).dropna()
     paired.columns = [label_a, label_b]
 
@@ -74,7 +74,7 @@ def wilcoxon_comparison(
         try:
             statistic, p_value = wilcoxon(
                 differences,
-                zero_method="wilcox",
+                zero_method='wilcox',
                 correction=False,
             )
         except ValueError:
@@ -106,7 +106,7 @@ def wilcoxon_comparison(
 
 
 def _holm_adjustment(p_values: pd.Series) -> pd.Series:
-    """Adjust p-values for multiple comparisons using Holm's method."""
+    '''Adjust p-values for multiple comparisons using the Holm method.'''
     valid = p_values.dropna().sort_values()
     adjusted = pd.Series(np.nan, index=p_values.index, dtype=float)
     running_max = 0.0
@@ -123,12 +123,12 @@ def _holm_adjustment(p_values: pd.Series) -> pd.Series:
 
 def compare_all_strategies(
     backtest_results: Dict[str, pd.DataFrame],
-    frequency: str = "ME",
+    frequency: str = 'ME',
 ) -> pd.DataFrame:
-    """Run a paired Wilcoxon comparison for every pair of strategies."""
-    print("\n" + "=" * 60)
-    print(f"STEP 4 — WILCOXON TEST ({frequency})")
-    print("=" * 60)
+    '''Run a paired Wilcoxon comparison for every pair of strategies.'''
+    print('\n' + '=' * 60)
+    print(f'STEP 4 — WILCOXON TEST ({frequency})')
+    print('=' * 60)
 
     periodic = {
         name: periodic_returns_from_backtest(dataframe, frequency)
@@ -152,20 +152,20 @@ def compare_all_strategies(
             stats[names.RETURN_FREQUENCY] = frequency
             rows.append(stats)
 
-            print(f"\n{strategy_a} vs {strategy_b}:")
+            print(f'\n{strategy_a} vs {strategy_b}:')
             print(
-                f"  n={stats[names.N]}, "
-                f"W={stats[names.WILCOXON_STATISTIC]:.2f}, "
-                f"p={stats[names.P_VALUE]:.4f}"
+                f'  n={stats[names.N]}, '
+                f'W={stats[names.WILCOXON_STATISTIC]:.2f}, '
+                f'p={stats[names.P_VALUE]:.4f}'
             )
             print(
-                f"  Mean difference: {stats[names.MEAN_DIFF] * 100:.2f}%, "
-                f"median: {stats[names.MEDIAN_DIFF] * 100:.2f}%"
+                f'  Mean difference: {stats[names.MEAN_DIFF] * 100:.2f}%, '
+                f'median: {stats[names.MEDIAN_DIFF] * 100:.2f}%'
             )
             print(
-                f"  Win rate {strategy_a}: "
-                f"{stats[names.WIN_RATE_A] * 100:.1f}% | "
-                f"{strategy_b}: {stats[names.WIN_RATE_B] * 100:.1f}%"
+                f'  Win rate {strategy_a}: '
+                f'{stats[names.WIN_RATE_A] * 100:.1f}% | '
+                f'{strategy_b}: {stats[names.WIN_RATE_B] * 100:.1f}%'
             )
 
     results = pd.DataFrame(rows)
@@ -192,18 +192,18 @@ def compare_all_strategies(
 def save_wilcoxon_results(
     df: pd.DataFrame,
     outdir: Path,
-    stem: str = "wilcoxon_results",
+    stem: str = 'wilcoxon_results',
 ) -> None:
-    """Save statistical comparisons as CSV and Markdown tables."""
+    '''Save statistical comparisons as CSV and Markdown tables.'''
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    csv_path = outdir / f"{stem}.csv"
+    csv_path = outdir / f'{stem}.csv'
     df.to_csv(csv_path, index=False)
-    print(f"\n[SAVED] {csv_path}")
+    print(f'\n[SAVED] {csv_path}')
 
-    markdown_path = outdir / f"{stem}.md"
-    with markdown_path.open("w", encoding="utf-8") as file:
-        file.write("# Wilcoxon Signed-Rank Test Results\n\n")
-        file.write(df.to_markdown(index=False, floatfmt=".4f"))
-    print(f"[SAVED] {markdown_path}")
+    markdown_path = outdir / f'{stem}.md'
+    with markdown_path.open('w', encoding='utf-8') as file:
+        file.write('# Wilcoxon Signed-Rank Test Results\n\n')
+        file.write(df.to_markdown(index=False, floatfmt='.4f'))
+    print(f'[SAVED] {markdown_path}')

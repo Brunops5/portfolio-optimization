@@ -77,7 +77,8 @@ treatment.
 
 ## Efficient frontier figure
 
-`reports/figures/efficient_frontier.png` uses the last estimation window. The
+`~/PortPerfilCrypto/reports/figures/efficient_frontier.pdf` uses the last
+estimation window. The
 blue points are randomly simulated feasible portfolios. The black curve is not
 an interpolation of those points: it is calculated by solving
 `efficient_risk` repeatedly from the minimum-volatility portfolio to the
@@ -98,20 +99,20 @@ Portfolio evolution and drawdown figures use lines only, without filled areas.
 Market data is cached outside the repository by default:
 
 ```text
-~/.cache/portfolio-optimization/market-data/
+~/.cache/portperfilcrypto/market-data/
 ```
 
-Set `PORTFOLIO_CACHE_DIR` to use another directory. The loader reuses existing
-candles, downloads missing intervals, removes duplicates, and writes cache files
-atomically. Failed downloads are not recorded as successful coverage and are
-retried on the next run. Legacy files in `data/raw` can be imported when their
-original schema identifies the source unambiguously.
+Set `PORTPERFILCRYPTO_CACHE_DIR` to use another directory. The loader reuses
+existing candles, downloads missing intervals, removes duplicates, and writes
+cache files atomically. Failed downloads are not recorded as successful coverage
+and are retried on the next run. Legacy files in `data/raw` can be imported when
+their original schema identifies the source unambiguously.
 
 Coinbase remains the fixed source after it has recognized a product. In
 particular, a shorter Coinbase history is not replaced by a potentially unrelated
 Yahoo ticker with the same symbol. Each run writes
-`data/processed/nci_data_provenance.csv` with source, coverage, observation count,
-missing days, and a SHA-256 checksum.
+`~/PortPerfilCrypto/data/processed/nci_data_provenance.csv` with source,
+coverage, observation count, missing days, and a SHA-256 checksum.
 
 The historical NCI compositions and their effective dates are recorded in
 `nci_constituents.yaml`. The union in `config.yaml` is used for collection only;
@@ -163,6 +164,7 @@ before the official run and should not be tuned to obtain a preferred result.
 ```text
 main.py                  Pipeline orchestration
 config.yaml              Experiment parameters
+ruff.toml                Formatting configuration
 nci_constituents.yaml    Point-in-time NCI compositions
 src/names.py             Shared constants
 src/data_loader.py       Data collection, cache, and returns
@@ -178,21 +180,21 @@ Makefile                 Installation and validation commands
 ## Outputs
 
 ```text
-data/processed/nci_prices.csv
-data/processed/nci_daily_simple.csv
-data/processed/nci_data_provenance.csv
-results/weights/weights_<strategy>.csv
-results/optimization/optimization_diagnostics.csv
-results/metrics/backtest_<strategy>.csv
-results/metrics/metrics_summary.csv
-reports/tables/wilcoxon_weekly.csv
-reports/tables/wilcoxon_weekly.md
-reports/tables/wilcoxon_monthly_robustness.csv
-reports/tables/wilcoxon_monthly_robustness.md
-reports/figures/portfolio_evolution.png
-reports/figures/drawdowns.png
-reports/figures/efficient_frontier.png
-reports/figures/heatmap_<strategy>.png
+~/PortPerfilCrypto/data/processed/nci_prices.csv
+~/PortPerfilCrypto/data/processed/nci_daily_simple.csv
+~/PortPerfilCrypto/data/processed/nci_data_provenance.csv
+~/PortPerfilCrypto/results/weights/weights_<strategy>.csv
+~/PortPerfilCrypto/results/optimization/optimization_diagnostics.csv
+~/PortPerfilCrypto/results/metrics/backtest_<strategy>.csv
+~/PortPerfilCrypto/results/metrics/metrics_summary.csv
+~/PortPerfilCrypto/reports/tables/wilcoxon_weekly.csv
+~/PortPerfilCrypto/reports/tables/wilcoxon_weekly.md
+~/PortPerfilCrypto/reports/tables/wilcoxon_monthly_robustness.csv
+~/PortPerfilCrypto/reports/tables/wilcoxon_monthly_robustness.md
+~/PortPerfilCrypto/reports/figures/portfolio_evolution.pdf
+~/PortPerfilCrypto/reports/figures/drawdowns.pdf
+~/PortPerfilCrypto/reports/figures/efficient_frontier.pdf
+~/PortPerfilCrypto/reports/figures/heatmap_<strategy>.pdf
 ```
 
 ## Current experiment summary

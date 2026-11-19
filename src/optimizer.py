@@ -1,4 +1,4 @@
-"""Estimate and optimize Markowitz portfolios in rolling time windows."""
+'''Estimate and optimize Markowitz portfolios in rolling time windows.'''
 
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -11,21 +11,24 @@ from pypfopt import EfficientFrontier, expected_returns, risk_models
 import names
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / names.CONFIG_FILENAME
-with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+with CONFIG_PATH.open('r', encoding='utf-8') as config_file:
     CONFIG = yaml.safe_load(config_file)
 
 
 def load_constituent_history(path: Optional[Path] = None) -> pd.DataFrame:
-    """Load the point-in-time NCI constituent history.
+    '''Load the point-in-time NCI constituent history.
 
     Each row contains the date on which a quarterly composition became active.
     Using this effective date prevents future constituents from entering an
     earlier optimization window.
-    """
+    '''
     if path is None:
-        path = CONFIG_PATH.parent / CONFIG[names.PATHS][names.CONSTITUENT_HISTORY]
+        path = (
+            CONFIG_PATH.parent
+            / Path(CONFIG[names.PATHS][names.CONSTITUENT_HISTORY]).expanduser()
+        )
 
-    with Path(path).open("r", encoding="utf-8") as file:
+    with Path(path).open('r', encoding='utf-8') as file:
         document = yaml.safe_load(file)
 
     if isinstance(document, dict):
@@ -33,7 +36,7 @@ def load_constituent_history(path: Optional[Path] = None) -> pd.DataFrame:
     else:
         rows = []
     if not rows:
-        raise ValueError("The NCI constituent history is empty.")
+        raise ValueError('The NCI constituent history is empty.')
 
     history = pd.DataFrame(rows)
     required_columns = {
@@ -42,11 +45,11 @@ def load_constituent_history(path: Optional[Path] = None) -> pd.DataFrame:
         names.CONSTITUENTS,
     }
     if not required_columns.issubset(history.columns):
-        raise ValueError("The NCI history is missing required fields.")
+        raise ValueError('The NCI history is missing required fields.')
 
     history[names.EFFECTIVE_DATE] = pd.to_datetime(history[names.EFFECTIVE_DATE])
     if history[names.EFFECTIVE_DATE].duplicated().any():
-        raise ValueError("The NCI history contains duplicate effective dates.")
+        raise ValueError('The NCI history contains duplicate effective dates.')
 
     history = history.sort_values(names.EFFECTIVE_DATE)
     history = history.set_index(names.EFFECTIVE_DATE)
@@ -58,8 +61,8 @@ def load_constituent_history(path: Optional[Path] = None) -> pd.DataFrame:
     missing_assets = historical_assets - set(CONFIG[names.ASSETS])
     if missing_assets:
         raise ValueError(
-            "Historical constituents missing from config.assets: "
-            f"{sorted(missing_assets)}"
+            'Historical constituents missing from config.assets: '
+            f'{sorted(missing_assets)}'
         )
 
     return history
@@ -69,27 +72,27 @@ def constituent_record_for_date(
     history: pd.DataFrame,
     date: pd.Timestamp,
 ) -> pd.Series:
-    """Return the latest NCI composition effective on the given date."""
+    '''Return the latest NCI composition effective on the given date.'''
     available = history.loc[history.index <= pd.Timestamp(date)]
     if available.empty:
-        raise ValueError(f"No NCI composition was effective on {date}.")
+        raise ValueError(f'No NCI composition was effective on {date}.')
     return available.iloc[-1]
 
 
 def estimate_inputs(
     simple_returns: pd.DataFrame,
 ) -> Tuple[pd.Series, pd.DataFrame, Dict]:
-    """Estimate annualized expected returns and covariance.
+    '''Estimate annualized expected returns and covariance.
 
     PyPortfolioOpt calculates the historical mean and sample covariance. The
     annualization factor is 365 because cryptocurrency markets trade every day.
     Spectral correction removes small negative eigenvalues caused by numerical
     noise. Both pre- and post-correction eigenvalues are kept for validation.
-    """
+    '''
     if simple_returns.empty or simple_returns.shape[1] < 2:
-        raise ValueError("Returns from at least two assets are required.")
+        raise ValueError('Returns from at least two assets are required.')
     if simple_returns.isna().any().any():
-        raise ValueError("The estimation window contains missing values.")
+        raise ValueError('The estimation window contains missing values.')
 
     mu = expected_returns.mean_historical_return(
         simple_returns,
@@ -122,16 +125,16 @@ def optimize_portfolio(
     min_weight: float = 0.0,
     max_weight: float = 1.0,
 ) -> Tuple[np.ndarray, Dict]:
-    """Maximize expected return without exceeding annualized volatility.
+    '''Maximize expected return without exceeding annualized volatility.
 
     The constraints are full investment and the configured weight bounds. If
     the target is below the minimum feasible volatility, the function returns
     the minimum-volatility portfolio and marks ``target_feasible`` as false.
-    """
+    '''
     if target_volatility <= 0:
-        raise ValueError("target_volatility must be positive.")
+        raise ValueError('target_volatility must be positive.')
     if not 0 <= min_weight <= max_weight <= 1:
-        raise ValueError("Weight bounds must satisfy 0 <= min <= max <= 1.")
+        raise ValueError('Weight bounds must satisfy 0 <= min <= max <= 1.')
 
     mu, covariance, covariance_info = estimate_inputs(simple_returns)
     bounds = (min_weight, max_weight)
@@ -149,12 +152,12 @@ def optimize_portfolio(
         frontier = EfficientFrontier(mu, covariance, weight_bounds=bounds)
         frontier.efficient_risk(target_volatility=float(target_volatility))
         weights = frontier.weights
-        message = "ok"
+        message = 'ok'
     else:
         weights = minimum_frontier.weights
         message = (
-            f"infeasible target ({target_volatility:.4f}); "
-            f"minimum volatility={minimum_volatility:.4f}"
+            f'infeasible target ({target_volatility:.4f}); '
+            f'minimum volatility={minimum_volatility:.4f}'
         )
 
     weights = np.asarray(weights, dtype=float)
@@ -167,7 +170,7 @@ def optimize_portfolio(
     info = {
         names.SUCCESS: True,
         names.MESSAGE: message,
-        names.OBJECTIVE: "max_return_for_target_volatility",
+        names.OBJECTIVE: 'max_return_for_target_volatility',
         names.TARGET_VOLATILITY: float(target_volatility),
         names.TARGET_FEASIBLE: bool(target_feasible),
         names.MINIMUM_VOLATILITY: minimum_volatility,
@@ -185,7 +188,7 @@ def _rebalance_dates(
     window_months: int,
     frequency: str,
 ) -> pd.DatetimeIndex:
-    """Select the first observed day of each period after the initial window."""
+    '''Select the first observed day of each period after the initial window.'''
     observed_dates = pd.Series(
         daily_returns.index,
         index=daily_returns.index,
@@ -195,14 +198,14 @@ def _rebalance_dates(
     first_observed_by_period = (
         observed_dates.resample(
             frequency,
-            closed="left",
-            label="left",
+            closed='left',
+            label='left',
         )
         .min()
         .dropna()
     )
     first_allowed = (
-        daily_returns.index.min().to_period("M") + window_months
+        daily_returns.index.min().to_period('M') + window_months
     ).start_time
     selected = first_observed_by_period.loc[first_observed_by_period >= first_allowed]
     return pd.DatetimeIndex(selected.to_numpy())
@@ -213,12 +216,12 @@ def prepare_estimation_window(
     rebalance_date: pd.Timestamp,
     constituent_history: pd.DataFrame,
 ) -> Tuple[pd.DataFrame, pd.Series, list[str]]:
-    """Build a historical window using only eligible NCI constituents.
+    '''Build a historical window using only eligible NCI constituents.
 
     Eligibility requires enough observations and a recent last price. Rows with
     any missing eligible asset are removed so every covariance entry uses the
     same dates. The rebalance date itself is excluded to avoid look-ahead.
-    """
+    '''
     constituent_record = constituent_record_for_date(
         constituent_history,
         rebalance_date,
@@ -227,8 +230,8 @@ def prepare_estimation_window(
     missing_columns = set(active_constituents) - set(daily_returns.columns)
     if missing_columns:
         raise ValueError(
-            f"NCI constituents without return series on {rebalance_date.date()}: "
-            f"{sorted(missing_columns)}"
+            f'NCI constituents without return series on {rebalance_date.date()}: '
+            f'{sorted(missing_columns)}'
         )
 
     window_start = rebalance_date - pd.DateOffset(
@@ -252,7 +255,7 @@ def prepare_estimation_window(
         if has_enough_history and has_recent_data:
             eligible.append(asset)
 
-    estimation_returns = window[eligible].dropna(how="any")
+    estimation_returns = window[eligible].dropna(how='any')
     return estimation_returns, constituent_record, eligible
 
 
@@ -261,11 +264,11 @@ def run_rolling_optimization(
     profiles: Optional[Dict] = None,
     constituent_history: Optional[pd.DataFrame] = None,
 ) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
-    """Optimize every risk profile on each valid rebalance date.
+    '''Optimize every risk profile on each valid rebalance date.
 
     All profiles and the 1/N benchmark share the same dates, eligible assets,
     and historical estimation window, making their backtests comparable.
-    """
+    '''
     if profiles is None:
         profiles = CONFIG[names.PROFILES]
     if constituent_history is None:
@@ -296,18 +299,18 @@ def run_rolling_optimization(
         window_start = rebalance_date - pd.DateOffset(months=window_months)
 
         if estimation_returns.shape[1] < 2:
-            print(f"[SKIP] Insufficient assets on {rebalance_date.date()}")
+            print(f'[SKIP] Insufficient assets on {rebalance_date.date()}')
             continue
         if len(estimation_returns) < min_observations:
-            print(f"[SKIP] Insufficient observations on {rebalance_date.date()}")
+            print(f'[SKIP] Insufficient observations on {rebalance_date.date()}')
             continue
 
         accepted_dates.append(rebalance_date)
         print(
-            f"\n[REBALANCE] {rebalance_date.date()} | "
-            f"Window: {window_start.date()} to "
-            f"{(rebalance_date - pd.Timedelta(days=1)).date()} | "
-            f"Assets: {eligible}"
+            f'\n[REBALANCE] {rebalance_date.date()} | '
+            f'Window: {window_start.date()} to '
+            f'{(rebalance_date - pd.Timedelta(days=1)).date()} | '
+            f'Assets: {eligible}'
         )
 
         for profile_key, profile_config in profiles.items():
@@ -322,8 +325,8 @@ def run_rolling_optimization(
                 )
             except Exception as exc:
                 raise RuntimeError(
-                    f"Could not optimize {profile_name} on "
-                    f"{rebalance_date.date()}: {exc}"
+                    f'Could not optimize {profile_name} on '
+                    f'{rebalance_date.date()}: {exc}'
                 ) from exc
 
             aligned = pd.Series(0.0, index=all_assets)
@@ -338,7 +341,7 @@ def run_rolling_optimization(
                     names.NCI_QUARTER: constituent_record[names.QUARTER],
                     names.NCI_CONSTITUENT_COUNT: len(active_constituents),
                     names.ELIGIBLE_COUNT: len(eligible),
-                    names.EXCLUDED_CONSTITUENTS: "|".join(
+                    names.EXCLUDED_CONSTITUENTS: '|'.join(
                         sorted(set(active_constituents) - set(eligible))
                     ),
                     **info,
@@ -346,14 +349,14 @@ def run_rolling_optimization(
             )
 
             if info[names.TARGET_FEASIBLE]:
-                status = ""
+                status = ''
             else:
-                status = " [INFEASIBLE TARGET]"
+                status = ' [INFEASIBLE TARGET]'
             print(
-                f"  {profile_name:12s}: "
-                f"volatility={info[names.ANNUAL_VOLATILITY]:.3f}/"
-                f"{info[names.TARGET_VOLATILITY]:.3f}, "
-                f"assets={info[names.NUM_ASSETS_SELECTED]}{status}"
+                f'  {profile_name:12s}: '
+                f'volatility={info[names.ANNUAL_VOLATILITY]:.3f}/'
+                f'{info[names.TARGET_VOLATILITY]:.3f}, '
+                f'assets={info[names.NUM_ASSETS_SELECTED]}{status}'
             )
 
         benchmark = pd.Series(0.0, index=all_assets)
@@ -369,23 +372,23 @@ def run_rolling_optimization(
 
 
 def save_weights(weights_dict: Dict[str, pd.DataFrame], outdir: Path) -> None:
-    """Save one CSV containing the rebalance weights of each strategy."""
+    '''Save one CSV containing the rebalance weights of each strategy.'''
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     for name, dataframe in weights_dict.items():
-        path = outdir / f"weights_{name}.csv"
+        path = outdir / f'weights_{name}.csv'
         dataframe.to_csv(path)
-        print(f"[SAVED] {name} weights: {path}")
+        print(f'[SAVED] {name} weights: {path}')
 
 
 def save_optimization_diagnostics(
     diagnostics: pd.DataFrame,
     outdir: Path,
 ) -> None:
-    """Save feasibility, risk, and covariance diagnostics for every window."""
+    '''Save feasibility, risk, and covariance diagnostics for every window.'''
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     path = outdir / names.OPTIMIZATION_DIAGNOSTICS_FILENAME
     diagnostics.to_csv(path, index=False)
-    print(f"[SAVED] Optimization diagnostics: {path}")
+    print(f'[SAVED] Optimization diagnostics: {path}')

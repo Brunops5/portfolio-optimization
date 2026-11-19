@@ -1,4 +1,4 @@
-"""Create publication-ready figures for the portfolio experiment."""
+'''Create publication-ready figures for the portfolio experiment.'''
 
 from pathlib import Path
 from typing import Dict, Optional
@@ -20,55 +20,55 @@ from optimizer import (
 )
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / names.CONFIG_FILENAME
-with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+with CONFIG_PATH.open('r', encoding='utf-8') as config_file:
     CONFIG = yaml.safe_load(config_file)
 
 PALETTE = {
-    names.RISK_065: "#1B5E20",
-    names.RISK_085: "#1565C0",
-    names.RISK_105: "#C62828",
-    names.BENCHMARK: "#616161",
+    names.RISK_065: '#1B5E20',
+    names.RISK_085: '#1565C0',
+    names.RISK_105: '#C62828',
+    names.BENCHMARK: '#616161',
 }
 
 PUBLICATION_STYLE = {
-    "font.family": "sans-serif",
-    "font.sans-serif": ["DejaVu Sans"],
-    "axes.labelsize": 14,
-    "axes.titlesize": 16,
-    "axes.titleweight": "bold",
-    "axes.linewidth": 0.8,
-    "axes.edgecolor": "#333333",
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 12,
-    "legend.fontsize": 11,
-    "figure.dpi": 150,
-    "savefig.dpi": 300,
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.15,
-    "figure.facecolor": "white",
-    "axes.facecolor": "white",
-    "axes.grid": True,
-    "grid.alpha": 0.3,
-    "grid.linewidth": 0.5,
-    "grid.color": "#BBBBBB",
-    "grid.linestyle": "--",
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['DejaVu Sans'],
+    'axes.labelsize': 14,
+    'axes.titlesize': 16,
+    'axes.titleweight': 'bold',
+    'axes.linewidth': 0.8,
+    'axes.edgecolor': '#333333',
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12,
+    'legend.fontsize': 11,
+    'figure.dpi': 150,
+    'savefig.dpi': 300,
+    'savefig.bbox': 'tight',
+    'savefig.pad_inches': 0.15,
+    'figure.facecolor': 'white',
+    'axes.facecolor': 'white',
+    'axes.grid': True,
+    'grid.alpha': 0.3,
+    'grid.linewidth': 0.5,
+    'grid.color': '#BBBBBB',
+    'grid.linestyle': '--',
 }
 
 
 def _strategy_label(strategy: str) -> str:
     if strategy == names.BENCHMARK:
-        return "Benchmark 1/N"
+        return 'Benchmark 1/N'
     profile = CONFIG[names.PROFILES].get(strategy)
     if profile is not None:
         return profile[names.PROFILE_NAME]
-    return strategy.replace("_", " ").title()
+    return strategy.replace('_', ' ').title()
 
 
 def _save_figure(fig: plt.Figure, save_path: Optional[Path]) -> None:
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path)
-        print(f"[SAVED] {save_path}")
+        print(f'[SAVED] {save_path}')
     plt.close(fig)
 
 
@@ -77,7 +77,7 @@ def plot_portfolio_evolution(
     log_scale: bool = True,
     save_path: Optional[Path] = None,
 ) -> None:
-    """Plot portfolio values as simple lines without filled areas."""
+    '''Plot portfolio values as simple lines without filled areas.'''
     fig, ax = plt.subplots(figsize=(14, 7))
 
     for name, dataframe in backtest_results.items():
@@ -86,19 +86,19 @@ def plot_portfolio_evolution(
             dataframe[names.PORTFOLIO_VALUE],
             label=_strategy_label(name),
             linewidth=2.0,
-            color=PALETTE.get(name, "#333333"),
+            color=PALETTE.get(name, '#333333'),
         )
 
-    ax.set_title("Net Portfolio Value Over Time", loc="left", pad=15)
-    ax.set_xlabel("Date", labelpad=10)
-    ax.set_ylabel("Portfolio value (US$)", labelpad=10)
+    ax.set_title('Net Portfolio Value Over Time', loc='left', pad=15)
+    ax.set_xlabel('Date', labelpad=10)
+    ax.set_ylabel('Portfolio value (US$)', labelpad=10)
     if log_scale:
-        ax.set_yscale("log")
-        ax.set_ylabel("Portfolio value (US$, log scale)", labelpad=10)
+        ax.set_yscale('log')
+        ax.set_ylabel('Portfolio value (US$, log scale)', labelpad=10)
 
-    ax.yaxis.set_major_formatter(mticker.StrMethodFormatter("${x:,.0f}"))
+    ax.yaxis.set_major_formatter(mticker.StrMethodFormatter('${x:,.0f}'))
     ax.xaxis.set_major_locator(mticker.MaxNLocator(8))
-    ax.legend(loc="upper left", frameon=True)
+    ax.legend(loc='upper left', frameon=True)
     fig.autofmt_xdate(rotation=30)
     sns.despine(ax=ax, top=True, right=True)
     _save_figure(fig, save_path)
@@ -109,7 +109,7 @@ def plot_drawdowns(
     initial_capital: float = 10000.0,
     save_path: Optional[Path] = None,
 ) -> None:
-    """Plot drawdowns as independent lines without overlapping filled areas."""
+    '''Plot drawdowns as independent lines without overlapping filled areas.'''
     fig, ax = plt.subplots(figsize=(14, 6))
 
     for name, dataframe in backtest_results.items():
@@ -122,16 +122,16 @@ def plot_drawdowns(
             drawdown,
             label=_strategy_label(name),
             linewidth=1.6,
-            color=PALETTE.get(name, "#333333"),
+            color=PALETTE.get(name, '#333333'),
         )
 
-    ax.axhline(0, color="#333333", linewidth=0.8)
-    ax.set_title("Drawdown Over Time", loc="left", pad=15)
-    ax.set_xlabel("Date", labelpad=10)
-    ax.set_ylabel("Drawdown", labelpad=10)
+    ax.axhline(0, color='#333333', linewidth=0.8)
+    ax.set_title('Drawdown Over Time', loc='left', pad=15)
+    ax.set_xlabel('Date', labelpad=10)
+    ax.set_ylabel('Drawdown', labelpad=10)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
     ax.xaxis.set_major_locator(mticker.MaxNLocator(8))
-    ax.legend(loc="lower left", frameon=True)
+    ax.legend(loc='lower left', frameon=True)
     fig.autofmt_xdate(rotation=30)
     sns.despine(ax=ax, top=True, right=True)
     _save_figure(fig, save_path)
@@ -139,13 +139,13 @@ def plot_drawdowns(
 
 def plot_allocation_heatmap(
     weights_df: pd.DataFrame,
-    title: str = "Weekly Allocation",
+    title: str = 'Weekly Allocation',
     save_path: Optional[Path] = None,
 ) -> None:
-    """Show asset weights at each rebalance date as a heatmap."""
+    '''Show asset weights at each rebalance date as a heatmap.'''
     label_step = max(1, int(np.ceil(len(weights_df.index) / 24)))
     tick_labels = [
-        date.strftime("%Y-%m-%d") if position % label_step == 0 else ""
+        date.strftime('%Y-%m-%d') if position % label_step == 0 else ''
         for position, date in enumerate(weights_df.index)
     ]
 
@@ -158,22 +158,22 @@ def plot_allocation_heatmap(
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     sns.heatmap(
         weights_df.T * 100,
-        cmap="Blues",
+        cmap='Blues',
         annot=show_values,
-        fmt=".1f",
-        annot_kws={"size": 10, "color": "#111111"},
-        cbar_kws={"label": "Weight (%)", "shrink": 0.6, "pad": 0.02},
+        fmt='.1f',
+        annot_kws={'size': 10, 'color': '#111111'},
+        cbar_kws={'label': 'Weight (%)', 'shrink': 0.6, 'pad': 0.02},
         linewidths=0.3,
-        linecolor="#E0E0E0",
+        linecolor='#E0E0E0',
         ax=ax,
         xticklabels=tick_labels,
         yticklabels=True,
     )
 
-    ax.set_title(title, loc="left", pad=15, fontweight="bold")
-    ax.set_xlabel("Rebalance date", labelpad=10)
-    ax.set_ylabel("Asset", labelpad=10)
-    plt.xticks(rotation=45, ha="right", fontsize=11)
+    ax.set_title(title, loc='left', pad=15, fontweight='bold')
+    ax.set_xlabel('Rebalance date', labelpad=10)
+    ax.set_ylabel('Asset', labelpad=10)
+    plt.xticks(rotation=45, ha='right', fontsize=11)
     plt.yticks(rotation=0, fontsize=11)
     _save_figure(fig, save_path)
 
@@ -183,7 +183,7 @@ def _efficient_frontier_points(
     covariance: pd.DataFrame,
     bounds: tuple[float, float],
 ) -> tuple[list[float], list[float], float, float, float]:
-    """Calculate the efficient curve from minimum risk to maximum return."""
+    '''Calculate the efficient curve from minimum risk to maximum return.'''
     minimum_frontier = EfficientFrontier(
         expected_returns,
         covariance,
@@ -236,12 +236,12 @@ def plot_efficient_frontier(
     n_random: int = 5000,
     save_path: Optional[Path] = None,
 ) -> None:
-    """Plot the feasible set and exact efficient frontier for the last window.
+    '''Plot the feasible set and exact efficient frontier for the last window.
 
     The curve is obtained by repeatedly solving the same risk-constrained
     optimization used by the experiment. Simulated portfolios provide context;
     they are not used to approximate the frontier itself.
-    """
+    '''
     last_rebalance = max(weights.index.max() for weights in weights_dict.values())
     constituent_history = load_constituent_history()
     estimation_window, _, eligible = prepare_estimation_window(
@@ -250,7 +250,7 @@ def plot_efficient_frontier(
         constituent_history,
     )
     if estimation_window.shape[1] < 2:
-        raise ValueError("Insufficient data to plot the efficient frontier.")
+        raise ValueError('Insufficient data to plot the efficient frontier.')
 
     expected_returns, covariance, _ = estimate_inputs(estimation_window)
     mean_returns = expected_returns.to_numpy()
@@ -269,12 +269,12 @@ def plot_efficient_frontier(
     )
     valid = candidates[within_bounds]
     if len(valid) < n_random:
-        raise ValueError("Could not simulate enough portfolios within the bounds.")
+        raise ValueError('Could not simulate enough portfolios within the bounds.')
 
     random_weights = valid[:n_random]
     random_returns = random_weights @ mean_returns
     random_variances = np.einsum(
-        "ij,jk,ik->i",
+        'ij,jk,ik->i',
         random_weights,
         cov_matrix,
         random_weights,
@@ -294,30 +294,32 @@ def plot_efficient_frontier(
     ax.scatter(
         random_volatilities,
         random_returns,
-        color="#4C78A8",
+        color='#4C78A8',
         s=8,
         alpha=0.2,
-        edgecolors="none",
-        label="Simulated feasible portfolios",
+        edgecolors='none',
+        label='Simulated feasible portfolios',
     )
 
     if frontier_volatilities:
         ax.plot(
             frontier_volatilities,
             frontier_returns,
-            color="#111111",
+            color='#111111',
             linewidth=2.5,
-            label="Efficient frontier",
+            label='Efficient frontier',
             zorder=4,
         )
     else:
         ax.scatter(
             minimum_volatility,
             minimum_return,
-            color="#111111",
-            marker="*",
-            s=220,
-            label="Efficient frontier (single point)",
+            facecolors='none',
+            edgecolors='#111111',
+            linewidths=1.5,
+            marker='*',
+            s=260,
+            label='Efficient frontier (single point)',
             zorder=7,
         )
 
@@ -325,8 +327,8 @@ def plot_efficient_frontier(
     for name, profile in CONFIG[names.PROFILES].items():
         ax.axvline(
             profile[names.TARGET_VOLATILITY],
-            color=PALETTE.get(name, "#333333"),
-            linestyle="--",
+            color=PALETTE.get(name, '#333333'),
+            linestyle='--',
             linewidth=1.0,
             alpha=0.55,
         )
@@ -354,30 +356,30 @@ def plot_efficient_frontier(
     for (volatility, annual_return), entries in grouped_points.items():
         labels = [entry[0] for entry in entries]
         strategy_names = [entry[1] for entry in entries]
-        color = PALETTE.get(strategy_names[0], "#333333")
-        marker = "o" if names.BENCHMARK in strategy_names else "D"
+        color = PALETTE.get(strategy_names[0], '#333333')
+        marker = 'o' if names.BENCHMARK in strategy_names else 'D'
         ax.scatter(
             volatility,
             annual_return,
             color=color,
             s=130,
             zorder=5,
-            edgecolors="white",
+            edgecolors='white',
             linewidths=1.5,
             marker=marker,
-            label=" / ".join(labels),
+            label=' / '.join(labels),
         )
 
     ax.set_title(
-        "Efficient Frontier and Feasible Portfolios — Last Estimation Window",
-        loc="left",
+        'Efficient Frontier and Feasible Portfolios — Last Estimation Window',
+        loc='left',
         pad=15,
     )
-    ax.set_xlabel("Annualized volatility", labelpad=10)
-    ax.set_ylabel("Expected annualized return", labelpad=10)
+    ax.set_xlabel('Annualized volatility', labelpad=10)
+    ax.set_ylabel('Expected annualized return', labelpad=10)
     ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
-    ax.legend(loc="best", frameon=True)
+    ax.legend(loc='best', frameon=True)
     sns.despine(ax=ax, top=True, right=True)
     _save_figure(fig, save_path)
 
@@ -388,10 +390,10 @@ def generate_all_figures(
     daily_returns: pd.DataFrame,
     outdir: Path,
 ) -> None:
-    """Generate every figure from validated experiment outputs."""
-    print("\n" + "=" * 60)
-    print("STEP 5 — VISUALIZATION")
-    print("=" * 60)
+    '''Generate every figure from validated experiment outputs.'''
+    print('\n' + '=' * 60)
+    print('STEP 5 — VISUALIZATION')
+    print('=' * 60)
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -414,8 +416,8 @@ def generate_all_figures(
         for name, weights in weights_dict.items():
             plot_allocation_heatmap(
                 weights,
-                title=f"Weekly Allocation — {_strategy_label(name)}",
-                save_path=outdir / f"heatmap_{name}.png",
+                title=f'Weekly Allocation — {_strategy_label(name)}',
+                save_path=outdir / f'heatmap_{name}.pdf',
             )
 
-    print(f"\n[ALL FIGURES SAVED IN] {outdir}")
+    print(f'\n[ALL FIGURES SAVED IN] {outdir}')
